@@ -54,6 +54,13 @@ final class Interpreter
         "\u{0307}" => ['z' => 'ż', 'Z' => 'Ż', 'I' => 'İ'],
     ];
 
+    /** First bytes of numeric tokens, checked without numeric string comparisons. */
+    private const NUMBER_START = [
+        '0' => true, '1' => true, '2' => true, '3' => true, '4' => true,
+        '5' => true, '6' => true, '7' => true, '8' => true, '9' => true,
+        '-' => true, '.' => true, '+' => true,
+    ];
+
     private static ?string $tokenPattern = null;
 
     private string $out = '';
@@ -174,7 +181,7 @@ final class Interpreter
         foreach ($m[0] as $tok) {
             $ch = $tok[0];
 
-            if (($ch >= '0' && $ch <= '9') || $ch === '-' || $ch === '.' || $ch === '+') {
+            if (isset(self::NUMBER_START[$ch])) {
                 // One token holds every number up to the next operator, so the thousands of path
                 // coordinates on a page cost one loop step per operator rather than one per number.
                 if ($array === null) {
