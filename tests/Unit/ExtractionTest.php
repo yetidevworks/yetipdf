@@ -141,6 +141,14 @@ final class ExtractionTest extends TestCase
         $this->assertSame("before\nafter path", YetiPdf::parse(PdfBuilder::build([$content]))->text());
     }
 
+    public function testUnclosedInlineImageHeadersDoNotHideLaterText(): void
+    {
+        $content = "BI /W 1 /H 1 ID \x00 EI\n"
+            . str_repeat('BI /W 1 ', 8000) . 'ID/ '
+            . 'BT /F1 10 Tf 72 720 Td (still readable) Tj ET';
+        $this->assertSame('still readable', YetiPdf::parse(PdfBuilder::build([$content]))->text());
+    }
+
     public function testNotAPdf(): void
     {
         $this->expectException(InvalidPdfException::class);

@@ -162,8 +162,9 @@ final class Interpreter
     private function run(string $content, array $resources, int $depth, array $active): void
     {
         // Inline images carry raw binary between ID and EI, which must not reach the tokenizer.
+        // Without an ID delimiter, skip the unmatched tail instead of retrying each later BI.
         if (str_contains($content, 'ID') && preg_match('/(?<![A-Za-z0-9])BI[\s\/]/', $content)) {
-            $content = preg_replace('/(?<![A-Za-z0-9])BI[\s\/].*?\sID\s.*?(?:\sEI(?![A-Za-z0-9])|$)/s', ' ', $content) ?? $content;
+            $content = preg_replace('/(?<![A-Za-z0-9])BI[\s\/](?:.*?\sID\s.*?(?:\sEI(?![A-Za-z0-9])|$)|.*+(*SKIP)(*F))/s', ' ', $content) ?? $content;
         }
 
         self::$tokenPattern ??= self::buildTokenPattern();
