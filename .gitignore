@@ -8,3 +8,6 @@
 /benchmarks/composer.lock
 /benchmarks/out.log
 /benchmarks/baseline
+/benchmarks/verify
+/benchmarks/single
+/benchmarks/codex-perf-report.md
