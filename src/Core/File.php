@@ -16,7 +16,7 @@ use YetiPdf\Filter\Filters;
  */
 final class File
 {
-    private const CACHE_LIMIT = 20000;
+    private const CACHE_LIMIT = 4096;
 
     /** @var array<int, array{0: int, 1: int, 2: int}> object number => [type, offset | container, generation | index] */
     private array $xref = [];
