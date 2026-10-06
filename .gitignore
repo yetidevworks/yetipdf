@@ -1,0 +1,10 @@
+/vendor
+/composer.lock
+/.phpunit.cache
+/benchmarks/corpus
+/benchmarks/out
+.DS_Store
+/benchmarks/vendor
+/benchmarks/composer.lock
+/benchmarks/out.log
+/benchmarks/baseline

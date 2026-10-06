@@ -1,0 +1,7 @@
+{
+    "description": "Other PDF text extractors, installed only to compare against. Not part of the library.",
+    "require": {
+        "prinsfrank/pdfparser": "^3.6",
+        "smalot/pdfparser": "^2.12"
+    }
+}

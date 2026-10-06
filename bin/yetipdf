@@ -1,0 +1,40 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php'] as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+
+use YetiPdf\YetiPdf;
+
+$args = array_slice($argv, 1);
+$stats = in_array('--stats', $args, true);
+$files = array_values(array_filter($args, static fn($a) => !str_starts_with($a, '--')));
+if ($files === []) {
+    fwrite(STDERR, "Usage: yetipdf [--stats] <file.pdf>\n");
+    exit(1);
+}
+
+try {
+    $start = hrtime(true);
+    $doc = YetiPdf::open($files[0]);
+    $pages = 0;
+    foreach ($doc->pages() as $text) {
+        $pages++;
+        echo $text, "\f";
+    }
+    if ($stats) {
+        fprintf(STDERR, "%d pages, %.3fs, %.1fMB peak\n", $pages, (hrtime(true) - $start) / 1e9, memory_get_peak_usage(true) / 1048576);
+        foreach ($doc->warnings() as $warning) {
+            fwrite(STDERR, "warning: $warning\n");
+        }
+    }
+} catch (Throwable $e) {
+    fwrite(STDERR, 'yetipdf: ' . $e->getMessage() . "\n");
+    exit(1);
+}
