@@ -133,6 +133,14 @@ final class ExtractionTest extends TestCase
         $this->assertSame('text', YetiPdf::parse(PdfBuilder::build([$content]))->text());
     }
 
+    public function testLongDrawingNumberRunDoesNotConsumeTextOperands(): void
+    {
+        $content = 'BT /F1 10 Tf 72 720 Td (before) Tj ET '
+            . str_repeat('1 ', 8000) . 'm '
+            . "BT /F1 10 Tf 1\t0 0\n1 72 700 Tm [(after)-300(path)] TJ ET";
+        $this->assertSame("before\nafter path", YetiPdf::parse(PdfBuilder::build([$content]))->text());
+    }
+
     public function testNotAPdf(): void
     {
         $this->expectException(InvalidPdfException::class);

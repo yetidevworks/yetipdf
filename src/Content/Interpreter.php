@@ -655,8 +655,9 @@ final class Interpreter
         return '~' . $string
             . '|<<|>>|<[0-9A-Fa-f\s]*+>'
             . '|/[^\s/\[\]()<>{}%]*+'
-            // A run of numbers, but only when a text operator, a string or an array end comes next.
-            . '|(?<![A-Za-z0-9.])' . $number . '(?:\s++' . $number . ')*+(?=\s*+(?:T[mdDfcwzL](?![A-Za-z0-9*])|cm(?![A-Za-z0-9*])|["\](<]))'
+            // Keep numbers only before a text operator, string or array end. Skip other runs once,
+            // rather than retrying the same failed lookahead at every number in a long drawing path.
+            . '|(?<![A-Za-z0-9.])' . $number . '(?:\s++' . $number . ')*+(?:(?=\s*+(?:T[mdDfcwzL](?![A-Za-z0-9*])|cm(?![A-Za-z0-9*])|["\](<]))|(*SKIP)(*F))'
             . '|(?<![A-Za-z0-9*\'"./#+-])(?:T[jJmdDfcwzL*]|BT|cm|Do|[qQ\'"])(?![A-Za-z0-9*\'"])'
             . '|[\[\]]'
             . '|%[^\r\n]*+~';
