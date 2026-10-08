@@ -57,6 +57,8 @@ final class Font
     private array $memo = [];
     /** @var array<int, string> composite code => text */
     private array $codeText = [];
+    /** @var array<int|string, string>|null byte (simple) or code (composite) => text as drawn() gives it */
+    private ?array $turned = null;
 
     public function decode(string $s): string
     {
@@ -103,6 +105,68 @@ final class Font
             $this->memo[$s] = [$text, $this->w, $this->n, $this->sp];
         }
         return $text;
+    }
+
+    /**
+     * The text of a string as decode() gives it, except that a glyph standing for several right-to-left
+     * characters has them last one first.
+     *
+     * Right-to-left text is drawn glyph by glyph from the left, so the caller turns the whole line around
+     * to read it. A ligature's own characters are already in reading order ("lam" then "alef" for the
+     * one glyph that joins them), and turning them around here means they come out right after that.
+     */
+    public function drawn(string $s): string
+    {
+        if ($this->simple) {
+            $this->turned ??= array_map(self::turn(...), $this->map);
+            return strtr($s, $this->turned);
+        }
+        if ($this->charset !== null) {
+            return $this->decode($s);
+        }
+        $codes = [];
+        if ($this->codespaces === []) {
+            $codes = ($this->codeBytes === 1 ? unpack('C*', $s) : unpack('n*', strlen($s) & 1 ? $s . "\0" : $s)) ?: [];
+        } else {
+            for ($i = 0, $len = strlen($s); $i < $len; $i += $bytes) {
+                [$bytes, $codes[]] = $this->codeAt($s, $i, $len);
+            }
+        }
+        $out = '';
+        foreach ($codes as $code) {
+            $out .= $this->turned[$code] ??= self::turn($this->codeText[$code] ?? $this->lookup($code));
+        }
+        return $out;
+    }
+
+    /** The text of one glyph, last character first when it has several and they read right to left. */
+    private static function turn(string $unit): string
+    {
+        // One character has nothing to turn around, and the length of a character shows in its first byte.
+        $first = $unit[0] ?? '';
+        if (isset($unit[$first < "\xE0" ? 2 : ($first < "\xF0" ? 3 : 4)]) && preg_match(Utf::RIGHT_TO_LEFT, $unit)) {
+            return Utf::reverse($unit);
+        }
+        return $unit;
+    }
+
+    /**
+     * The code that starts at byte $i of a string, for a font whose codes vary in length.
+     *
+     * @return array{0: int, 1: int} bytes taken, code
+     */
+    private function codeAt(string $s, int $i, int $len): array
+    {
+        $value = 0;
+        for ($bytes = 1; $bytes <= 4 && $i + $bytes <= $len; $bytes++) {
+            $value = ($value << 8) | ord($s[$i + $bytes - 1]);
+            foreach ($this->codespaces as [$b, $lo, $hi]) {
+                if ($b === $bytes && $value >= $lo && $value <= $hi) {
+                    return [$bytes, $value];
+                }
+            }
+        }
+        return [1, ord($s[$i])];
     }
 
     private function decodeComposite(string $s): string

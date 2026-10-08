@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace YetiPdf\Content;
 
+use YetiPdf\Font\Utf;
+
 /**
  * Puts a line with Hebrew or Arabic in it into reading order.
  *
@@ -18,6 +20,7 @@ final class Bidi
     private const NUMBER = 2;
     private const LEFT = 3;
     private const OTHER = 4;
+    private const LONGEST_LINE = 16384;
 
     /** Right-to-left letters and marks, without the two sets of Arabic digits: those read left to right. */
     private const R = '\x{0590}-\x{065F}\x{066A}-\x{06EF}\x{06FA}-\x{08FF}\x{FB1D}-\x{FDFF}\x{FE70}-\x{FEFC}';
@@ -32,7 +35,9 @@ final class Bidi
     /** Turns a line in the order it is drawn, left to right, into the order it is read. */
     public static function logical(string $line): string
     {
-        if (!preg_match_all(self::TOKENS, $line, $m, PREG_SET_ORDER)) {
+        // Each word and each punctuation mark costs a small array below. A line of text is a few hundred
+        // bytes; something far longer is not a line anybody will read, and is left as it is.
+        if (strlen($line) > self::LONGEST_LINE || !preg_match_all(self::TOKENS, $line, $m, PREG_SET_ORDER)) {
             return $line;
         }
         $tokens = [];
@@ -97,7 +102,7 @@ final class Bidi
         for ($i = 0, $n = count($tokens); $i < $n; $i++) {
             [$class, $text] = $tokens[$i];
             if ($class !== self::LEFT && $class !== self::NUMBER) {
-                $pieces[] = $class === self::RIGHT ? self::reverse($text) : $text;
+                $pieces[] = $class === self::RIGHT ? Utf::reverse($text) : $text;
                 continue;
             }
             // Words join across spaces and punctuation, and take the numbers after them along.
@@ -132,12 +137,6 @@ final class Bidi
     private static function separator(string $between): bool
     {
         return strlen($between) === 1 && str_contains('.,:/-+', $between);
-    }
-
-    /** The same characters, last one first. */
-    public static function reverse(string $text): string
-    {
-        return implode('', array_reverse(preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [$text]));
     }
 
     /** Characters, not bytes. */

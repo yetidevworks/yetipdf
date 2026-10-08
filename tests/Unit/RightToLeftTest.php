@@ -59,11 +59,15 @@ final class RightToLeftTest extends TestCase
         $this->assertSame($read, Bidi::logical($drawn));
     }
 
-    /** A font whose letters a-f are the first six Hebrew letters, 500 units wide, plus space and digits. */
+    /**
+     * A font whose letters a-f are the first six Hebrew letters, 500 units wide, plus space and digits.
+     * "g" is one glyph for the two letters alef and bet, and "h" is the vowel mark qamats.
+     */
     private static function hebrewFont(): array
     {
         $cmap = "1 begincodespacerange <00> <FF> endcodespacerange\n"
-            . "3 beginbfrange <61> <66> <05D0> <30> <39> <0030> <20> <20> <0020> endbfrange";
+            . "3 beginbfrange <61> <66> <05D0> <30> <39> <0030> <20> <20> <0020> endbfrange\n"
+            . "2 beginbfchar <67> <05D005D1> <68> <05B8> endbfchar";
         $widths = implode(' ', array_fill(0, 96, 500));
         return [
             ['F1' => "/Subtype /TrueType /BaseFont /Hebrew /FirstChar 32 /Widths [$widths] /ToUnicode 100 0 R"],
@@ -107,6 +111,71 @@ final class RightToLeftTest extends TestCase
             . ' 1 0 0 1 92 720 Tm (cba) Tj 1 0 0 1 92 700 Tm (fed) Tj ET',
         ], $fonts, $extra);
         $this->assertSame("אבג דהו\nדהו אבג", YetiPdf::parse($pdf)->text());
+    }
+
+    public function testLettersOfOneGlyphStayInReadingOrder(): void
+    {
+        [$fonts, $extra] = self::hebrewFont();
+        // The glyph for alef and bet together is drawn to the left of gimel, so it is read after it. A font
+        // lists the letters of such a glyph in reading order already, and they must not be turned around with the line.
+        $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td (gc) Tj ET'], $fonts, $extra);
+        $this->assertSame('ג' . 'א' . 'ב', YetiPdf::parse($pdf)->text());
+    }
+
+    public function testLetterDrawnOnTopOfItsVowelMarkLeavesNoGap(): void
+    {
+        [$fonts, $extra] = self::hebrewFont();
+        // The mark and bet are one string, with spacing that takes back all they would move. Alef comes
+        // one letter further along, which is no gap at all.
+        $pdf = PdfBuilder::build([
+            'BT /F1 10 Tf 1 0 0 1 72 720 Tm (c) Tj -5 Tc 1 0 0 1 77 720 Tm (hb) Tj 0 Tc 1 0 0 1 82 720 Tm (a) Tj ET',
+        ], $fonts, $extra);
+        $this->assertSame('א' . 'ב' . "\u{05B8}" . 'ג', YetiPdf::parse($pdf)->text());
+    }
+
+    public function testVowelMarkDrawnOnItsOwnJoinsTheLetterItSitsOn(): void
+    {
+        [$fonts, $extra] = self::hebrewFont();
+        // The mark is as wide as a letter and starts a hair to one side of bet or the other. Either way it is over bet.
+        foreach (['76.8', '77.3'] as $x) {
+            $pdf = PdfBuilder::build([
+                "BT /F1 10 Tf 1 0 0 1 72 720 Tm (c) Tj 1 0 0 1 $x 720 Tm (h) Tj 1 0 0 1 77 720 Tm (b) Tj 1 0 0 1 82 720 Tm (a) Tj ET",
+            ], $fonts, $extra);
+            $this->assertSame('א' . 'ב' . "\u{05B8}" . 'ג', YetiPdf::parse($pdf)->text(), "mark at $x");
+        }
+    }
+
+    public function testLongPageKeepsItsLinesInPlace(): void
+    {
+        [$fonts, $extra] = self::hebrewFont();
+        $fonts['F2'] = '/Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding';
+        // Enough text that the start of the page has been put aside by the time a line has to be taken back,
+        // and by the time the second half of a line drawn in two goes arrives.
+        $content = 'BT /F2 10 Tf 12 TL 1 0 0 1 72 9000 Tm ';
+        $lines = [];
+        $ordinary = static function (int $from) use (&$content, &$lines): void {
+            for ($i = $from; $i < $from + 300; $i++) {
+                $content .= "(Ordinary line number $i of this page) Tj T* ";
+                $lines[] = "Ordinary line number $i of this page";
+            }
+        };
+        $ordinary(1);
+        $content .= '(Total: ) Tj /F1 10 Tf (cba) Tj T* ';
+        $lines[] = 'Total: ' . 'אבג';
+        $content .= '1 0 0 1 300 100 Tm (fed ) Tj /F2 10 Tf 1 0 0 1 72 5000 Tm ';
+        $lines[] = 'אבג' . ' ' . 'דהו';
+        $ordinary(301);
+        $content .= '/F1 10 Tf 1 0 0 1 320 100 Tm (cba) Tj /F2 10 Tf 1 0 0 1 72 1000 Tm (The end) Tj ET';
+        $lines[] = 'The end';
+
+        $this->assertSame(implode("\n", $lines), YetiPdf::parse(PdfBuilder::build([$content], $fonts, $extra))->text());
+    }
+
+    public function testLineTooLongToBeALineIsLeftAsItIsDrawn(): void
+    {
+        $line = str_repeat(self::r('שלום') . ' ', 2000);
+        $this->assertSame($line, Bidi::logical($line));
+        $this->assertNotSame($line, Bidi::logical(substr($line, 0, 900)));
     }
 
     public function testOrdinaryTextAroundARightToLeftLineIsUntouched(): void

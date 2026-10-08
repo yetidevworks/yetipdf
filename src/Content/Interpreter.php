@@ -31,6 +31,10 @@ final class Interpreter
     private const MAX_HELD = 50000;
     /** Pieces in one line past which the letter-level tidying in place() is skipped, to keep its cost in step with the line's size. */
     private const MAX_TIDIED = 2000;
+    /** Output this far behind the current line is put aside, so that taking text back out of a line never copies the whole page. */
+    private const SETTLED = 8192;
+    /** How much of the text before a piece is looked at for letters the piece repeats. */
+    private const OVERLAP = 256;
 
     /** Gap, as a fraction of the font size, that separates two words. */
     public float $wordGap = 0.11;
@@ -71,6 +75,8 @@ final class Interpreter
     private static ?string $tokenPattern = null;
 
     private string $out = '';
+    /** @var list<string> output that is finished with, oldest first; $out carries on from it */
+    private array $done = [];
     private bool $hasPrev = false;
     private float $px = 0.0;
     private float $py = 0.0;
@@ -101,11 +107,13 @@ final class Interpreter
     /** @var array{0: float, 1: float, 2: float, 3: float} the held line's position across the page, its direction, and its size */
     private array $heldAt = [0.0, 1.0, 0.0, 0.0];
     /**
-     * Held lines that have ended, waiting for the page to finish: [position across, direction x, direction y, start, end, pieces].
+     * Held lines that have ended, waiting for the page to finish: [position across, direction x, direction y, start, end].
      *
-     * @var list<array{0: float, 1: float, 2: float, 3: float, 4: float, 5: list<array{0: float, 1: float, 2: string, 3: float}>}>
+     * @var list<array{0: float, 1: float, 2: float, 3: float, 4: float}>
      */
     private array $lines = [];
+    /** @var list<list<array{0: float, 1: float, 2: string, 3: float}>> the pieces of each of those lines */
+    private array $pieces = [];
     private int $heldCount = 0;
 
     // Current transformation matrix.
@@ -149,11 +157,13 @@ final class Interpreter
     public function page(string $content, array $resources, array $appearances = []): string
     {
         $this->out = '';
+        $this->done = [];
         $this->hasPrev = false;
         $this->accentAt = -1;
         $this->lineAt = 0;
         $this->held = null;
         $this->lines = [];
+        $this->pieces = [];
         $this->heldCount = 0;
         $this->a = $this->d = 1.0;
         $this->b = $this->c = $this->e = $this->f = 0.0;
@@ -185,6 +195,10 @@ final class Interpreter
         }
         if ($this->held !== null) {
             $this->release();
+        }
+        if ($this->done !== []) {
+            $this->out = implode('', $this->done) . $this->out;
+            $this->done = [];
         }
         if ($this->lines !== []) {
             $this->place();
@@ -471,8 +485,7 @@ final class Interpreter
                 $size = abs($this->size) * $hLen;
             }
 
-            if (($font->rtl || $this->held !== null)
-                && $this->hold($text, $x, $y, $ux, $uy, $size, $advance * $hLen, $font->n ?: 1, abs($font->w * $this->size * $this->hScale) * $hLen)) {
+            if (($font->rtl || $this->held !== null) && $this->hold($font, $s, $text, $x, $y, $ux, $uy, $size, $hLen, $advance)) {
                 $this->advance($advance);
                 return;
             }
@@ -514,6 +527,10 @@ final class Interpreter
             $before = strlen($this->out);
 
             if ($glue === "\n") {
+                if ($this->lineAt > self::SETTLED) {
+                    $this->settle();
+                    $before = strlen($this->out);
+                }
                 $out = $this->out;
                 $len = strlen($out);
                 // "exam-" at a line end followed by "ple": put the word back together.
@@ -573,10 +590,10 @@ final class Interpreter
      * They are kept until the page ends, then sorted by where they sit and put into reading order.
      * Returns false for ordinary text on an ordinary line, which costs nothing extra.
      *
-     * $width is how far the text moves the position along the line, $natural how wide its letters are
-     * before any letter spacing is applied.
+     * $s is the string as the page has it and $text what it decodes to. $advance is how far it moves the
+     * position in text space, and $hLen how long one unit of that is on the page.
      */
-    private function hold(string $text, float $x, float $y, float $ux, float $uy, float $size, float $width, int $letters, float $natural): bool
+    private function hold(Font $font, string $s, string $text, float $x, float $y, float $ux, float $uy, float $size, float $hLen, float $advance): bool
     {
         $same = false;
         if ($this->hasPrev) {
@@ -602,6 +619,9 @@ final class Interpreter
                     $this->held[] = [$this->lx * $this->pux + $this->ly * $this->puy, $this->px * $this->pux + $this->py * $this->puy, $head, $this->psize];
                 }
             } else {
+                if ($this->lineAt > self::SETTLED) {
+                    $this->settle();
+                }
                 if ($this->hasPrev) {
                     $this->out .= "\n";
                 }
@@ -614,12 +634,21 @@ final class Interpreter
 
         $this->heldCount++;
         $start = $x * $ux + $y * $uy;
+        $width = $advance * $hLen;
+        $letters = $font->n ?: 1;
+        // How wide one letter is, going by the font alone.
+        $letter = abs($font->w * $this->size * $this->hScale) * $hLen / $letters;
         if ($width < 0.0) {
             // Negative letter spacing makes a string run backwards across the page (one way of writing right to left).
             // Its first letter is then its rightmost, and each letter still extends to the right of where it is placed.
-            $this->held[] = [$start + $width - $width / $letters, $start + $natural / $letters, Bidi::reverse($text), $size];
+            $this->held[] = [$start + $width - $width / $letters, $start + $letter, Utf::reverse($text), $size];
+        } elseif ($text[0] >= "\xD6" && $text[0] <= "\xDB" && !isset($text[12]) && preg_match('/^\p{Mn}+$/u', $text)) {
+            // Vowel marks drawn by themselves. They sit on a letter, and their middle says which one better than where they start.
+            $middle = $start + $width / 2;
+            $this->held[] = [$middle, $middle, $text, $size];
         } else {
-            $this->held[] = [$start, $start + $width, $text, $size];
+            // Letters set on top of each other (a letter and its vowel mark, say) move the position by less than one of them is wide.
+            $this->held[] = [$start, $start + ($width > $letter ? $width : $letter), $font->rtl ? $font->drawn($s) : $text, $size];
         }
 
         $this->hasPrev = true;
@@ -653,11 +682,14 @@ final class Interpreter
         // A line is not always drawn in one go: print drivers cut wide lines into strips and draw the
         // page strip by strip. Pieces that carry on from a line already seen on this page join it.
         for ($i = count($this->lines) - 1, $oldest = max(0, $i - self::MAX_LINES_BACK); $i >= $oldest; $i--) {
-            $line = $this->lines[$i];
-            if (abs($line[0] - $across) <= 0.1 * $size && $line[1] * $ux + $line[2] * $uy >= 0.99 && $min <= $line[4] + $size && $max >= $line[3] - $size) {
-                $this->lines[$i][3] = $min < $line[3] ? $min : $line[3];
-                $this->lines[$i][4] = $max > $line[4] ? $max : $line[4];
-                $this->lines[$i][5] = array_merge($line[5], $held);
+            [$at, $lux, $luy, $from, $to] = $this->lines[$i];
+            if (abs($at - $across) <= 0.1 * $size && $lux * $ux + $luy * $uy >= 0.99 && $min <= $to + $size && $max >= $from - $size) {
+                $this->lines[$i][3] = $min < $from ? $min : $from;
+                $this->lines[$i][4] = $max > $to ? $max : $to;
+                // One at a time: a line that arrives in a thousand strips is then never copied.
+                foreach ($held as $piece) {
+                    $this->pieces[$i][] = $piece;
+                }
                 // Nothing of this line stays here, so neither does the line break that led up to it.
                 if (strlen($this->out) === $this->lineAt && str_ends_with($this->out, "\n")) {
                     $this->out = substr($this->out, 0, -1);
@@ -666,20 +698,32 @@ final class Interpreter
             }
         }
         $this->out .= "\0\x1E" . count($this->lines) . "\x1E\0";
-        $this->lines[] = [$across, $ux, $uy, $min, $max, $held];
+        $this->lines[] = [$across, $ux, $uy, $min, $max];
+        $this->pieces[] = $held;
+    }
+
+    /** Puts the output before the current line aside. Only the line itself can still change. */
+    private function settle(): void
+    {
+        $at = min($this->lineAt, strlen($this->out));
+        $this->done[] = substr($this->out, 0, $at);
+        $this->out = substr($this->out, $at);
+        $this->lineAt = 0;
     }
 
     /** Puts the text of the held lines where release() marked them. */
     private function place(): void
     {
         $text = [];
-        foreach ($this->lines as $i => $line) {
-            $pieces = $line[5];
+        foreach ($this->pieces as $i => $pieces) {
             // Left to right along the line. A vowel mark has no width and sits on its letter, so it sorts after it.
             usort($pieces, static fn(array $a, array $b): int => [$a[0], $b[1] - $b[0]] <=> [$b[0], $a[1] - $a[0]]);
 
             $tidy = count($pieces) <= self::MAX_TIDIED;
+            // The line so far is $visual and then $last, its final character. A vowel mark drawn on its own goes
+            // between the two, so that it follows its letter once the line is turned around.
             $visual = '';
+            $last = '';
             $end = 0.0;
             $before = null;
             foreach ($pieces as $piece) {
@@ -689,29 +733,31 @@ final class Interpreter
                     if ($part === $before[2] && abs($start - $before[0]) < 0.2 * $size) {
                         continue;
                     }
-                    if ($start - $end > $this->wordGap * $size && $part[0] !== ' ' && !str_ends_with($visual, ' ')) {
-                        $visual .= ' ';
+                    if ($start - $end > $this->wordGap * $size && $part[0] !== ' ' && $last !== ' ') {
+                        $visual .= $last;
+                        $last = ' ';
                     } elseif ($tidy && $end - $start > 0.2 * $size && $stop > $start) {
-                        $part = self::withoutOverlap($visual, $part, ($end - $start) / ($stop - $start));
+                        $part = self::withoutOverlap(substr($visual, -self::OVERLAP) . $last, $part, ($end - $start) / ($stop - $start));
                     }
                 }
-                if ($tidy && $stop - $start < 0.01 * $size && $visual !== '' && preg_match('/^\p{Mn}+$/u', $part)) {
-                    // A mark drawn on its own: put it in front of its letter, so that it follows the letter once the line is turned around.
-                    $at = strlen($visual) - 1;
-                    while ($at > 0 && (ord($visual[$at]) & 0xC0) === 0x80) {
+                if ($tidy && $stop - $start < 0.01 * $size && $last !== '' && preg_match('/^\p{Mn}+$/u', $part)) {
+                    $visual .= $part;
+                } elseif ($part !== '') {
+                    $at = strlen($part) - 1;
+                    while ($at > 0 && (ord($part[$at]) & 0xC0) === 0x80) {
                         $at--;
                     }
-                    $visual = substr($visual, 0, $at) . $part . substr($visual, $at);
-                } else {
-                    $visual .= $part;
+                    $visual .= $last . substr($part, 0, $at);
+                    $last = substr($part, $at);
                 }
                 $end = $before === null || $stop > $end ? $stop : $end;
                 $before = $piece;
             }
-            $text["\0\x1E$i\x1E\0"] = Bidi::logical($visual);
+            $text["\0\x1E$i\x1E\0"] = Bidi::logical($visual . $last);
         }
         $this->out = strtr($this->out, $text);
         $this->lines = [];
+        $this->pieces = [];
     }
 
     /**

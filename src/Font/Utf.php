@@ -10,6 +10,12 @@ final class Utf
     /** Matches text with a Hebrew or Arabic letter in it (or one from their smaller right-to-left relatives). */
     public const RIGHT_TO_LEFT = '/[\x{0590}-\x{08FF}\x{FB1D}-\x{FDFF}\x{FE70}-\x{FEFC}]/u';
 
+    /** The same characters, last one first. */
+    public static function reverse(string $text): string
+    {
+        return implode('', array_reverse(preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [$text]));
+    }
+
     public static function chr(int $cp): string
     {
         if ($cp < 0x80) {
