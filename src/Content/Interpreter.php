@@ -114,6 +114,8 @@ final class Interpreter
     private string $accentMark = '';
     private bool $accentLone = false;
     private bool $accentHadPrev = false;
+    /** True when the lone accent began a new line, so the letter it lands on begins that line too. */
+    private bool $accentBreak = false;
     private float $ax = 0.0;
     private float $ay = 0.0;
     /** Where the current line starts in the output, and where on the page it began. */
@@ -583,9 +585,13 @@ final class Interpreter
                     // builds accented letters). Take the accent back out and attach it to the letter.
                     $text = self::compose($text, $this->accentMark);
                     $this->out = substr($this->out, 0, $this->accentAt);
-                    if ($this->accentLone && $this->accentHadPrev
-                        && ($x - $this->ax) * $this->pux + ($y - $this->ay) * $this->puy > $this->wordGap * $ref) {
-                        $glue = ' ';
+                    if ($this->accentLone && $this->accentHadPrev) {
+                        // What stood between the accent and the text before it now stands before the letter.
+                        if ($this->accentBreak) {
+                            $glue = "\n";
+                        } elseif (($x - $this->ax) * $this->pux + ($y - $this->ay) * $this->puy > $this->wordGap * $ref) {
+                            $glue = ' ';
+                        }
                     }
                 } elseif ($off > $this->lineGap * $ref || ($ux * $this->pux + $uy * $this->puy) < 0.9) {
                     $glue = "\n";
@@ -634,6 +640,7 @@ final class Interpreter
                 if ($this->accentLone) {
                     $this->accentAt = $before;
                     $this->accentHadPrev = $this->hasPrev;
+                    $this->accentBreak = $glue === "\n";
                     $this->ax = $this->px;
                     $this->ay = $this->py;
                 } else {

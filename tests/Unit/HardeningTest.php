@@ -409,13 +409,13 @@ final class HardeningTest extends TestCase
         }
         $this->assertSame(implode("\n", $expected), YetiPdf::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
 
-        // A letter drawn over an accent takes the accent back out of the text, and runs on from the line before.
+        // A letter drawn over an accent takes the accent back out of the text, along with the line break before it, and puts both back.
         $lines = '';
         for ($i = 0; $i < 6000; $i++) {
             $y = 780 - $i * 12;
             $lines .= "1 0 0 1 72 $y Tm (\264) Tj 1 0 0 1 72 $y Tm (e) Tj ";
         }
-        $this->assertSame(str_repeat('é', 6000), YetiPdf::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
+        $this->assertSame(implode("\n", array_fill(0, 6000, 'é')), YetiPdf::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
     }
 
     /** A font that turns the code <0041> into a hundred letters. */

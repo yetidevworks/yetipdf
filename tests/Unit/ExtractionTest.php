@@ -114,6 +114,13 @@ final class ExtractionTest extends TestCase
         $this->assertSame('café', YetiPdf::parse($pdf)->text());
     }
 
+    public function testAccentedLetterAtTheStartOfALineStaysOnThatLine(): void
+    {
+        // The accent is the first thing drawn on the new line. Taking it back to put it on its letter must not take the line break with it.
+        $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td (the end) Tj 0 -12 Td [(\264)333(ecole is out)] TJ ET']);
+        $this->assertSame("the end\nécole is out", YetiPdf::parse($pdf)->text());
+    }
+
     public function testFormXObjectTextIsIncluded(): void
     {
         $form = PdfBuilder::stream('BT /F1 10 Tf 0 0 Td (inside form) Tj ET', false, '/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 10 0 R >> >>');
