@@ -832,17 +832,30 @@ final class Interpreter
             $last = '';
             $end = 0.0;
             $before = null;
+            $spaced = false;
             foreach ($pieces as $piece) {
                 [$start, $stop, $part, $size] = $piece;
+                // A space drawn by itself is only a space if the letters either side of it are apart at all:
+                // some are drawn on top of the letter before them, in the middle of a word.
+                if (trim($part, ' ') === '') {
+                    $spaced = true;
+                    continue;
+                }
                 if ($before !== null) {
+                    // "The same spot" is a fifth of the font size, or half the piece's own width for a narrow letter:
+                    // two of those in a row are closer together than that fifth.
+                    $near = 0.2 * $size;
+                    if ($stop > $start && ($stop - $start) * 0.5 < $near) {
+                        $near = ($stop - $start) * 0.5;
+                    }
                     // The same text drawn again at the same spot is fake bold.
-                    if ($part === $before[2] && abs($start - $before[0]) < 0.2 * $size) {
+                    if ($part === $before[2] && abs($start - $before[0]) < $near) {
                         continue;
                     }
-                    if ($start - $end > $this->wordGap * $size && $part[0] !== ' ' && $last !== ' ') {
+                    if ($start - $end > ($spaced ? 0.03 : $this->wordGap) * $size && $part[0] !== ' ' && $last !== ' ') {
                         $visual .= $last;
                         $last = ' ';
-                    } elseif ($tidy && $end - $start > 0.2 * $size && $stop > $start) {
+                    } elseif ($tidy && $end - $start > $near && $stop > $start) {
                         $part = self::withoutOverlap(substr($visual, -self::OVERLAP) . $last, $part, ($end - $start) / ($stop - $start));
                     }
                 }
@@ -858,6 +871,7 @@ final class Interpreter
                 }
                 $end = $before === null || $stop > $end ? $stop : $end;
                 $before = $piece;
+                $spaced = false;
             }
             $text["\0\x1E$i\x1E\0"] = Bidi::logical($visual . $last);
         }

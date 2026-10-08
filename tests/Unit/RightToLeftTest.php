@@ -152,6 +152,36 @@ final class RightToLeftTest extends TestCase
         }
     }
 
+    public function testNarrowLetterRepeatedIsNotMistakenForBold(): void
+    {
+        [$fonts, $extra] = self::hebrewFont();
+        // At 30% width each letter moves on by 0.15 of the font size, which is closer than bold's second copy usually sits.
+        $pdf = PdfBuilder::build(['BT /F1 10 Tf 30 Tz 1 0 0 1 72 720 Tm (c) Tj (c) Tj (c) Tj (b) Tj ET'], $fonts, $extra);
+        $this->assertSame('ב' . 'ג' . 'ג' . 'ג', YetiPdf::parse($pdf)->text());
+    }
+
+    public function testNarrowLetterDrawnTwiceIsReadOnce(): void
+    {
+        [$fonts, $extra] = self::hebrewFont();
+        // Dalet is 2 wide here and is drawn again 0.2 to the right of itself, most of the way over the first.
+        $pdf = PdfBuilder::build([
+            'BT /F1 10 Tf 40 Tz 1 0 0 1 72 720 Tm (fed) Tj 1 0 0 1 76.2 720 Tm (d) Tj 1 0 0 1 78 720 Tm (cba) Tj ET',
+        ], $fonts, $extra);
+        $this->assertSame('אבגדהו', YetiPdf::parse($pdf)->text());
+    }
+
+    public function testSpaceDrawnOverALetterDoesNotSplitTheWord(): void
+    {
+        [$fonts, $extra] = self::hebrewFont();
+        // Gimel is at 72 to 77 and bet starts at 77. The space between them in the file is drawn at 73, on top of gimel.
+        $onTop = 'BT /F1 10 Tf 1 0 0 1 72 720 Tm (c) Tj 1 0 0 1 73 720 Tm ( ) Tj 1 0 0 1 77 720 Tm (b) Tj ET';
+        $this->assertSame('ב' . 'ג', YetiPdf::parse(PdfBuilder::build([$onTop], $fonts, $extra))->text());
+
+        // Here bet starts at 77.8. That is less than a word gap, but with a space drawn there it is one.
+        $between = 'BT /F1 10 Tf 1 0 0 1 72 720 Tm (c) Tj 1 0 0 1 76 720 Tm ( ) Tj 1 0 0 1 77.8 720 Tm (b) Tj ET';
+        $this->assertSame('ב' . ' ' . 'ג', YetiPdf::parse(PdfBuilder::build([$between], $fonts, $extra))->text());
+    }
+
     public function testLongPageKeepsItsLinesInPlace(): void
     {
         [$fonts, $extra] = self::hebrewFont();
