@@ -286,6 +286,12 @@ final class File
             }
             $this->objStreams[$container] = $loaded;
         }
+        if (array_key_last($this->objStreams) !== $container) {
+            // Used again, so it goes to the back of the queue: the one dropped next is the one unused for longest.
+            $entry = $this->objStreams[$container];
+            unset($this->objStreams[$container]);
+            $this->objStreams[$container] = $entry;
+        }
         [$data, $offsets] = $this->objStreams[$container];
         if (!isset($offsets[$num])) {
             return null;
