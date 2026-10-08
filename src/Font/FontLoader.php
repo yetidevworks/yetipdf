@@ -302,7 +302,26 @@ final class FontLoader
      */
     private function fallbackMap(array $dict, array $descendant): ?CodeMap
     {
-        return null;
+        return $this->collectionMap($dict, $descendant);
+    }
+
+    /**
+     * Identity-H/V makes each code a CID, and a CID of one of Adobe's CJK collections has a published character.
+     *
+     * @param array<string, mixed> $dict
+     * @param array<string, mixed> $descendant
+     */
+    private function collectionMap(array $dict, array $descendant): ?CodeMap
+    {
+        if (!in_array($this->file->resolve($dict['Encoding'] ?? null), ['/Identity-H', '/Identity-V'], true)) {
+            return null;
+        }
+        $info = $this->file->dict($descendant['CIDSystemInfo'] ?? null) ?? [];
+        if ($this->name($info['Registry'] ?? null) !== 'Adobe') {
+            return null;
+        }
+        $ordering = trim($this->name($info['Ordering'] ?? null), " \t\r\n\0");
+        return CidCollection::supports($ordering) ? new CidCollection($ordering) : null;
     }
 
     private function applyCodeLengths(Font $font, CMap $cmap): void
