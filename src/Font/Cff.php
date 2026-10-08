@@ -220,8 +220,9 @@ NAMES;
             return self::standardString($sid);
         }
         $i = $sid - 391;
-        // A SID with no string behind it is a broken font; its glyph just has no name.
-        return $i < $strings['count'] ? $this->item($strings, $i) : null;
+        // A SID with no string behind it is a broken font; its glyph just has no name. Neither has one whose
+        // "name" runs on for kilobytes: a real one is at most 127 bytes, and every code that used it would get its own copy.
+        return $i < $strings['count'] ? $this->item($strings, $i, 127) : null;
     }
 
     /**
@@ -249,13 +250,21 @@ NAMES;
         return ['count' => $count, 'size' => $size, 'offsets' => $offsets, 'base' => $base, 'last' => $last, 'end' => $base + $last];
     }
 
-    /** @param array{count: int, size: int, offsets: int, base: int, last: int, end: int} $index */
-    private function item(array $index, int $i): string
+    /**
+     * One item of an INDEX, or null when it is longer than $longest bytes.
+     *
+     * @param array{count: int, size: int, offsets: int, base: int, last: int, end: int} $index
+     * @return ($longest is null ? string : string|null)
+     */
+    private function item(array $index, int $i, ?int $longest = null): ?string
     {
         $from = $this->uint($index['offsets'] + $i * $index['size'], $index['size']);
         $to = $this->uint($index['offsets'] + ($i + 1) * $index['size'], $index['size']);
         if ($from < 1 || $to < $from || $to > $index['last']) {
             throw new \OutOfRangeException('Bad INDEX offsets');
+        }
+        if ($longest !== null && $to - $from > $longest) {
+            return null;
         }
         return substr($this->data, $index['base'] + $from, $to - $from);
     }

@@ -124,6 +124,14 @@ final class CffTest extends TestCase
         $this->assertSame([11 => 'ff', 14 => 'ffi', 65 => 'A'], Cff::encoding($font));
     }
 
+    public function testNameTooLongToBeANameIsLeftOut(): void
+    {
+        // 127 bytes is the longest a glyph name may be. A font can claim megabytes for one, and give it to every code.
+        $font = self::font(self::codes(11, 14, 65), self::sids(391, 392, 34), [str_repeat('x', 127), str_repeat('y', 128)], offSize: 2);
+
+        $this->assertSame([11 => str_repeat('x', 127), 65 => 'A'], Cff::encoding($font));
+    }
+
     public function testIsoAdobeCharsetUsesTheGlyphNumberAsTheSid(): void
     {
         // Codes 1 to 229 are glyphs 1 to 229; ISOAdobe stops at glyph 228 (zcaron).
