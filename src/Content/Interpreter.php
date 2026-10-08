@@ -1006,15 +1006,12 @@ final class Interpreter
      */
     private static function operands(mixed $run): array
     {
-        return is_string($run) ? self::numbers(self::tail($run)) : [];
+        return is_string($run) ? self::numbers(isset($run[1024]) ? self::tail($run) : $run) : [];
     }
 
     /** The end of a run of numbers. Operators read at most six, and a run can be megabytes long. */
     private static function tail(string $run): string
     {
-        if (!isset($run[1024])) {
-            return $run;
-        }
         $run = substr($run, -1024);
         return substr($run, strcspn($run, " \n\r\t") + 1);
     }
@@ -1028,7 +1025,7 @@ final class Interpreter
         if (strpbrk($run, " \n\r\t") === false) {
             return (float)$run;
         }
-        $numbers = self::numbers(self::tail($run));
+        $numbers = self::numbers(isset($run[1024]) ? self::tail($run) : $run);
         return $numbers === [] ? 0.0 : $numbers[count($numbers) - 1];
     }
 

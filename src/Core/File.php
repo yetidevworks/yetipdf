@@ -409,13 +409,12 @@ final class File
         // An entry takes at least a few bytes of the file, so a table longer than the file is not telling the truth.
         $data = $this->streamData($stream, false, strlen($this->data) + 65536) ?? '';
         $index = is_array($dict['Index'] ?? null) ? $dict['Index'] : [0, (int)($dict['Size'] ?? 0)];
-        $entries = max(1 << 16, intdiv(strlen($this->data), 2));
         $pos = 0;
-        $len = strlen($data);
+        $len = min(strlen($data), max(1 << 16, intdiv(strlen($this->data), 2)) * $rowLen);
         for ($s = 0; $s + 1 < count($index); $s += 2) {
             $num = (int)$index[$s];
             $count = (int)$index[$s + 1];
-            for ($i = 0; $i < $count && $pos + $rowLen <= $len && count($this->xref) < $entries; $i++, $pos += $rowLen) {
+            for ($i = 0; $i < $count && $pos + $rowLen <= $len; $i++, $pos += $rowLen) {
                 $type = $w0 === 0 ? 1 : self::beInt($data, $pos, $w0);
                 if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
                     continue;

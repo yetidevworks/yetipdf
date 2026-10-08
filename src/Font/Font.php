@@ -18,7 +18,10 @@ final class Font
     public const GAP = "\x1F";
     /** Width, in text units, from which such a glyph counts as a gap between words. */
     public const GAP_WIDTH = 0.1;
-    /** Bytes of text the two caches below may hold; a character map can make one code stand for a lot of text. */
+    /**
+     * Bytes of text the per-code cache may hold; a character map can make one code stand for a lot of text.
+     * (The string cache needs no such limit: it holds a thousand strings of 48 bytes, and a code is at most 384 bytes of text.)
+     */
     private const CACHE_BYTES = 8 << 20;
     /** Strings longer than this are decoded in pieces of this many bytes (an even number, so no two-byte code is split). */
     private const PIECE = 16384;
@@ -70,7 +73,6 @@ final class Font
 
     /** @var array<string, array{0: string, 1: float, 2: int, 3: int}> */
     private array $memo = [];
-    private int $memoBytes = 0;
     /** @var array<int, string> composite code => text */
     private array $codeText = [];
     /** @var array<int|string, string>|null byte (simple) or code (composite) => text as drawn() gives it */
@@ -120,12 +122,10 @@ final class Font
         }
 
         if (strlen($s) <= 48) {
-            if (count($this->memo) >= self::MEMO_LIMIT || $this->memoBytes > self::CACHE_BYTES) {
+            if (count($this->memo) >= self::MEMO_LIMIT) {
                 $this->memo = [];
-                $this->memoBytes = 0;
             }
             $this->memo[$s] = [$text, $this->w, $this->n, $this->sp];
-            $this->memoBytes += strlen($text);
         }
         return $text;
     }
