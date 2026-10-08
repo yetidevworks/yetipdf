@@ -54,4 +54,16 @@ final class FontTest extends TestCase
         $this->assertSame('12ffiAD', $font->decode("\0A01BCD"));
         $this->assertSame($width, $font->w);
     }
+
+    public function testUnknownGlyphNamesKeepTheBaseEncoding(): void
+    {
+        // "CP" and "BT" are names a generator made up; the base encoding still says what the codes are.
+        // A name that spells its own code in hex is Windows-encoded, which matters above 127.
+        $file = new File(PdfBuilder::build([], [
+            'F1' => '/Subtype /Type1 /BaseFont /Custom /Encoding << /BaseEncoding /StandardEncoding /Differences [65 /BT 97 /CP /.notdef 150 /C96 /endash] >>',
+        ]));
+        $font = (new FontLoader($file))->load(new Ref(10));
+
+        $this->assertSame("Aac\u{2013}\u{2013}", $font->decode("Aabc\x96\x97"));
+    }
 }

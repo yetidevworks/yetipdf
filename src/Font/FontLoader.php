@@ -162,18 +162,22 @@ final class FontLoader
             if ($code < 0 || $code > 255) {
                 continue;
             }
-            $text = GlyphList::toUnicode($name);
-            if ($text !== '') {
-                $named++;
-            } elseif (preg_match('/^(?:[A-Za-z]{1,2}|cid|glyph|index)(\d+)$/', $name, $m)) {
-                // A made-up name such as "a65" or "g12". When the number is the code itself (dvips bitmap
-                // fonts do this) the code is a TeX text encoding, which is ASCII plus a few ligatures.
+            $text = GlyphList::lookup($name);
+            if ($text === null) {
+                // A made-up name such as "a65", "g12" or "CP". When its number is the code itself the font
+                // is saying which encoding it follows: in decimal (dvips bitmap fonts) a TeX text encoding,
+                // which is ASCII plus a few ligatures; in hex (Windows printer drivers) the Windows one.
                 // Otherwise keep whatever the base encoding says: a wrong letter can be searched around, a missing one cannot.
                 $synthetic++;
-                if ((int)$m[1] === $code) {
+                if (preg_match('/^(?:[A-Za-z]{1,2}|cid|glyph|index)(\d+)$/', $name, $m) && (int)$m[1] === $code) {
                     $texCodes[] = $code;
+                } elseif ($table[$code] === '' && preg_match('/^[A-Za-z]{1,2}([0-9A-Fa-f]{2})$/', $name, $m) && hexdec($m[1]) === $code) {
+                    $table[$code] = Encodings::table('WinAnsiEncoding')[$code];
                 }
                 continue;
+            }
+            if ($text !== '') {
+                $named++;
             }
             $table[$code] = $text;
         }

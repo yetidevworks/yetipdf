@@ -31,6 +31,15 @@ final class GlyphList
 
     public static function toUnicode(string $name): string
     {
+        return self::lookup($name) ?? '';
+    }
+
+    /**
+     * The text for a glyph name, or null when the name means nothing to us. An empty string is an
+     * answer too: ".notdef" and a few TeX names are known to stand for no text at all.
+     */
+    public static function lookup(string $name): ?string
+    {
         self::$list ??= require dirname(__DIR__, 2) . '/data/glyphlist.php';
         $list = self::$list;
 
@@ -47,13 +56,16 @@ final class GlyphList
         // "a.sc", "one.oldstyle": the part before the first dot names the character.
         $dot = strpos($name, '.');
         if ($dot !== false) {
-            return $dot === 0 ? '' : self::toUnicode(substr($name, 0, $dot));
+            return $dot === 0 ? '' : self::lookup(substr($name, 0, $dot));
         }
         // "f_f_i": a ligature spelled out from its parts.
         if (str_contains($name, '_')) {
-            $out = '';
+            $out = null;
             foreach (explode('_', $name) as $part) {
-                $out .= self::toUnicode($part);
+                $text = self::lookup($part);
+                if ($text !== null) {
+                    $out .= $text;
+                }
             }
             return $out;
         }
@@ -67,6 +79,6 @@ final class GlyphList
         if (preg_match('/^u([0-9A-F]{4,6})$/', $name, $m)) {
             return Utf::chr((int)hexdec($m[1]));
         }
-        return '';
+        return null;
     }
 }
