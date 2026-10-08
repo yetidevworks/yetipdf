@@ -22,6 +22,8 @@ final class CMap implements CodeMap
     private const EXPAND_PER_BYTE = 64;
     /** Most bytes of UTF-16 a code may map to. Real mappings are a few characters; a ligature is three or four, a joined emoji up to about ten. */
     private const MAX_TARGET = 256;
+    /** A code and what it stands for, or the two ends of a range of codes. */
+    private const PAIR = '/<([0-9A-Fa-f\s]*)>\s*<([0-9A-Fa-f\s]*)>/';
 
     /** @var array<int, string> */
     public array $map = [];
@@ -39,113 +41,109 @@ final class CMap implements CodeMap
     public static function parse(string $data, int $room = PHP_INT_MAX): self
     {
         $cmap = new self();
-        $expandable = max(self::EXPAND_FLOOR, self::EXPAND_PER_BYTE * strlen($data));
-        // Reading a section costs about a hundred bytes for each byte of it.
-        $largest = intdiv($room, 128);
+        // What ranges may take when written out, and never more than a quarter of what is left.
+        $expandable = min(max(self::EXPAND_FLOOR, self::EXPAND_PER_BYTE * strlen($data)), intdiv($room, 4));
+        // Reading a section costs about fifteen bytes for each byte of it, and up to thirty for one written to cost the most.
+        $largest = intdiv($room, 64);
 
-        if (preg_match_all('/begincodespacerange(.*?)(?:endcodespacerange|$)/s', $data, $sections)) {
-            foreach ($sections[1] as $section) {
-                if (strlen($section) > $largest) {
-                    $cmap->partial = true;
-                    continue;
-                }
-                preg_match_all('/<([0-9A-Fa-f\s]*)>\s*<([0-9A-Fa-f\s]*)>/', $section, $pairs, PREG_SET_ORDER);
-                foreach ($pairs as $pair) {
-                    $lo = self::clean($pair[1]);
-                    $hi = self::clean($pair[2]);
-                    $bytes = intdiv(strlen($lo) + 1, 2);
-                    if ($bytes >= 1 && $bytes <= 4) {
-                        $cmap->lengths[$bytes] = true;
-                        $cmap->codespaces[] = [$bytes, (int)hexdec($lo), (int)hexdec($hi)];
-                    }
+        foreach (self::sections($data, 'begincodespacerange', 'endcodespacerange') as $section) {
+            if (strlen($section) > $largest || preg_match_all(self::PAIR, $section, $pairs) === false) {
+                $cmap->partial = true;
+                continue;
+            }
+            foreach ($pairs[1] as $i => $first) {
+                $lo = self::clean($first);
+                $hi = self::clean($pairs[2][$i]);
+                $bytes = intdiv(strlen($lo) + 1, 2);
+                if ($bytes >= 1 && $bytes <= 4) {
+                    $cmap->lengths[$bytes] = true;
+                    $cmap->codespaces[] = [$bytes, (int)hexdec($lo), (int)hexdec($hi)];
                 }
             }
         }
         $declared = $cmap->lengths !== [];
 
-        if (preg_match_all('/beginbfchar(.*?)(?:endbfchar|$)/s', $data, $sections)) {
-            foreach ($sections[1] as $section) {
-                if (strlen($section) > $largest) {
-                    $cmap->partial = true;
+        foreach (self::sections($data, 'beginbfchar', 'endbfchar') as $section) {
+            if (strlen($section) > $largest || preg_match_all(self::PAIR, $section, $pairs) === false) {
+                $cmap->partial = true;
+                continue;
+            }
+            foreach ($pairs[1] as $i => $first) {
+                $src = self::clean($first);
+                if ($src === '' || strlen($src) > 8) {
                     continue;
                 }
-                preg_match_all('/<([0-9A-Fa-f\s]*)>\s*<([0-9A-Fa-f\s]*)>/', $section, $pairs, PREG_SET_ORDER);
-                foreach ($pairs as $pair) {
-                    $src = self::clean($pair[1]);
-                    if ($src === '' || strlen($src) > 8) {
-                        continue;
-                    }
-                    if (!$declared) {
-                        $cmap->lengths[intdiv(strlen($src) + 1, 2)] = true;
-                    }
-                    $cmap->map[(int)hexdec($src)] = self::text($pair[2]);
+                if (!$declared) {
+                    $cmap->lengths[intdiv(strlen($src) + 1, 2)] = true;
                 }
+                $cmap->map[(int)hexdec($src)] = self::text($pairs[2][$i]);
             }
         }
 
-        if (preg_match_all('/beginbfrange(.*?)(?:endbfrange|$)/s', $data, $sections)) {
-            foreach ($sections[1] as $section) {
-                if (strlen($section) > $largest) {
-                    $cmap->partial = true;
-                    continue;
-                }
-                preg_match_all('/<([0-9A-Fa-f\s]*)>|(\[)|(\])/', $section, $tokens, PREG_SET_ORDER);
-                $n = count($tokens);
-                $i = 0;
-                while ($i + 2 < $n) {
-                    if (($tokens[$i][2] ?? '') !== '' || ($tokens[$i][3] ?? '') !== '') {
-                        $i++;
-                        continue;
-                    }
-                    $loHex = self::clean($tokens[$i][1]);
-                    $hiHex = self::clean($tokens[$i + 1][1] ?? '');
-                    $lo = (int)hexdec($loHex);
-                    $hi = (int)hexdec($hiHex);
-                    $i += 2;
-                    if (!$declared && $loHex !== '') {
-                        $cmap->lengths[intdiv(strlen($loHex) + 1, 2)] = true;
-                    }
-
-                    if (($tokens[$i][2] ?? '') === '[') {
-                        $i++;
-                        $code = $lo;
-                        while ($i < $n && ($tokens[$i][3] ?? '') !== ']') {
-                            if (($tokens[$i][2] ?? '') === '' && $code <= $hi) {
-                                $cmap->map[$code] = self::text($tokens[$i][1]);
-                            }
-                            $code++;
-                            $i++;
-                        }
-                        $i++;
-                        continue;
-                    }
-
-                    $target = self::bytes($tokens[$i][1] ?? '');
+        foreach (self::sections($data, 'beginbfrange', 'endbfrange') as $section) {
+            // Each token is "<hex>", "[" or "]". One flat list of them is a tenth of the memory that a list of matches with groups takes.
+            if (strlen($section) > $largest || preg_match_all('/<[0-9A-Fa-f\s]*>|[\[\]]/', $section, $found) === false) {
+                $cmap->partial = true;
+                continue;
+            }
+            $tokens = $found[0];
+            unset($found);
+            $n = count($tokens);
+            $i = 0;
+            while ($i + 2 < $n) {
+                if ($tokens[$i][0] !== '<') {
                     $i++;
-                    if ($target === '' || strlen($target) > self::MAX_TARGET || $hi < $lo || strlen($loHex) > 8) {
-                        continue;
+                    continue;
+                }
+                $loHex = self::clean(substr($tokens[$i], 1, -1));
+                $hiHex = $tokens[$i + 1][0] === '<' ? self::clean(substr($tokens[$i + 1], 1, -1)) : '';
+                $lo = (int)hexdec($loHex);
+                $hi = (int)hexdec($hiHex);
+                $i += 2;
+                if (!$declared && $loHex !== '') {
+                    $cmap->lengths[intdiv(strlen($loHex) + 1, 2)] = true;
+                }
+
+                if ($tokens[$i] === '[') {
+                    $i++;
+                    $code = $lo;
+                    while ($i < $n && $tokens[$i] !== ']') {
+                        if ($tokens[$i] !== '[' && $code <= $hi) {
+                            $cmap->map[$code] = self::text(substr($tokens[$i], 1, -1));
+                        }
+                        $code++;
+                        $i++;
                     }
-                    $dst = Utf::utf16Codepoints($target);
-                    $last = array_pop($dst);
-                    $prefix = '';
-                    foreach ($dst as $cp) {
-                        $prefix .= Utf::chr($cp);
-                    }
-                    $cost = ($hi - $lo + 1) * (64 + strlen($prefix));
-                    if ($hi - $lo > self::LAZY_RANGE || $cost > $expandable) {
-                        $cmap->ranges[] = [$lo, $hi, $prefix, $last];
-                        continue;
-                    }
-                    $expandable -= $cost;
-                    for ($code = $lo; $code <= $hi; $code++) {
-                        $cmap->map[$code] = $prefix . Utf::chr($last + $code - $lo);
-                    }
+                    $i++;
+                    continue;
+                }
+
+                $target = $tokens[$i][0] === '<' ? self::bytes(substr($tokens[$i], 1, -1)) : '';
+                $i++;
+                if ($target === '' || strlen($target) > self::MAX_TARGET || $hi < $lo || strlen($loHex) > 8) {
+                    continue;
+                }
+                $dst = Utf::utf16Codepoints($target);
+                $last = array_pop($dst);
+                $prefix = '';
+                foreach ($dst as $cp) {
+                    $prefix .= Utf::chr($cp);
+                }
+                $cost = ($hi - $lo + 1) * (64 + strlen($prefix));
+                if ($hi - $lo > self::LAZY_RANGE || $cost > $expandable) {
+                    $cmap->ranges[] = [$lo, $hi, $prefix, $last];
+                    continue;
+                }
+                $expandable -= $cost;
+                for ($code = $lo; $code <= $hi; $code++) {
+                    $cmap->map[$code] = $prefix . Utf::chr($last + $code - $lo);
                 }
             }
         }
 
+        unset($tokens);
         if ($cmap->ranges !== []) {
-            $cmap->index = new Ranges(array_map(static fn(array $r): array => [$r[0], $r[1]], $cmap->ranges));
+            $cmap->index = new Ranges($cmap->ranges);
         }
         return $cmap;
     }
@@ -161,6 +159,27 @@ final class CMap implements CodeMap
         }
         [$lo, , $prefix, $last] = $this->ranges[$range];
         return $prefix . Utf::chr($last + $code - $lo);
+    }
+
+    /**
+     * The text between each $begin and the $end after it, or the end of the data when there is none.
+     * A plain search: a pattern that does this gives up without a word on a section of a megabyte or so.
+     *
+     * @return list<string>
+     */
+    private static function sections(string $data, string $begin, string $end): array
+    {
+        $sections = [];
+        for ($at = 0; ($from = strpos($data, $begin, $at)) !== false; $at = $to + strlen($end)) {
+            $from += strlen($begin);
+            $to = strpos($data, $end, $from);
+            if ($to === false) {
+                $sections[] = substr($data, $from);
+                break;
+            }
+            $sections[] = substr($data, $from, $to - $from);
+        }
+        return $sections;
     }
 
     public function isEmpty(): bool

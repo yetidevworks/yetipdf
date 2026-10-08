@@ -575,4 +575,21 @@ final class HardeningTest extends TestCase
         $content = str_repeat('q 1 0 0 1 1 1 cm ', 6000) . 'BT /F1 12 Tf 72 720 Td (still here) Tj ET' . str_repeat(' Q', 6000);
         $this->assertSame('still here', YetiPdf::parse(PdfBuilder::build([$content]))->text());
     }
+
+    public function testASectionOfACharacterMapPastAMegabyteIsRead(): void
+    {
+        // 80,000 lines in one section. A pattern used to pick the section out, and gave up without a word at this size.
+        $body = '';
+        for ($i = 0; $i < 80000; $i++) {
+            $body .= sprintf("<%06X> <%04X>\n", $i, 0x4E00 + $i % 20000);
+        }
+        $this->assertGreaterThan(1 << 20, strlen($body));
+        $cmap = CMap::parse("1 begincodespacerange <000000> <FFFFFF> endcodespacerange\n80000 beginbfchar\n{$body}endbfchar\n"
+            . "2 beginbfrange <100000> <100002> <0041> <100010> <100011> [<0061> <0062>] endbfrange");
+
+        $this->assertFalse($cmap->partial);
+        $this->assertSame(Utf::chr(0x4E00 + 79999 % 20000), $cmap->get(79999));
+        $this->assertSame('C', $cmap->get(0x100002));
+        $this->assertSame('b', $cmap->get(0x100011));
+    }
 }

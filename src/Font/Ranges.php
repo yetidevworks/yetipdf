@@ -21,7 +21,7 @@ final class Ranges
     private array $ids = [];
 
     /**
-     * @param list<array{0: int, 1: int}> $ranges [low, high] pairs. Where ranges overlap, the one earlier in the list wins.
+     * @param list<array{0: int, 1: int, ...}> $ranges each starting with its low and high end. Where ranges overlap, the one earlier in the list wins.
      */
     public function __construct(array $ranges)
     {
