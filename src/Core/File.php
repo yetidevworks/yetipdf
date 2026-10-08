@@ -19,6 +19,11 @@ final class File
     private const CACHE_LIMIT = 1024;
     /** Decoded object streams kept at once; the oldest is dropped to make room. */
     private const OBJSTM_LIMIT = 32;
+    /** Smallest and largest size a decoded stream may reach when the limit comes from the memory that is left. */
+    private const MIN_DECODED = 16 << 20;
+    private const MAX_DECODED = 512 << 20;
+    /** Warnings kept; a file full of broken parts would otherwise fill memory with notes about them. */
+    private const WARNING_LIMIT = 100;
 
     /**
      * Object number => where to find it, packed into one integer because a large PDF has tens of
@@ -38,10 +43,18 @@ final class File
     /** @var list<int> object streams found while rebuilding */
     private array $containers = [];
     private ?Decryptor $crypt = null;
+    /** Where the last search for "endstream" came up empty, so later streams do not search the same stretch again. */
+    private int $noEndstream = PHP_INT_MAX;
+    /** @var array<string, true> */
+    private array $noted = [];
     /** @var list<string> */
     public array $warnings = [];
 
-    public function __construct(private readonly string $data, string $password = '')
+    /**
+     * @param int|null $memory bytes this document may use for decoded streams and page content; null means
+     *        whatever is left under PHP's memory_limit. Tests pass a small number to see the limits work.
+     */
+    public function __construct(private readonly string $data, string $password = '', private readonly ?int $memory = null)
     {
         if (!str_contains(substr($data, 0, 1024), '%PDF-') && !str_contains($data, ' obj')) {
             throw new InvalidPdfException('Not a PDF file');
@@ -87,6 +100,35 @@ final class File
     public function isEncrypted(): bool
     {
         return $this->crypt !== null;
+    }
+
+    /** Adds a note to $warnings unless it is already there. */
+    public function warn(string $message): void
+    {
+        $count = count($this->noted);
+        if (isset($this->noted[$message]) || $count > self::WARNING_LIMIT) {
+            return;
+        }
+        if ($count === self::WARNING_LIMIT) {
+            $message = 'More problems were found than are listed here';
+        }
+        $this->noted[$message] = true;
+        $this->warnings[] = $message;
+    }
+
+    /** Bytes still free for working data. */
+    public function room(): int
+    {
+        return $this->memory ?? Memory::left();
+    }
+
+    /** The most one decoded stream, or the text of one page, may take. */
+    public function limit(): int
+    {
+        if ($this->memory !== null) {
+            return max(1, intdiv($this->memory, 4));
+        }
+        return max(self::MIN_DECODED, min(self::MAX_DECODED, intdiv(Memory::left(), 4)));
     }
 
     /** @return list<int> */
@@ -141,8 +183,30 @@ final class File
         return $this->cache[$num] = $value;
     }
 
-    /** Decoded stream contents, or null when the stream holds image data. */
-    public function streamData(Stream $s, bool $decrypt = true): ?string
+    /**
+     * Decoded stream contents, or null when the stream holds image data.
+     *
+     * A stream that unpacks to more than $limit bytes (by default what limit() says) is cut off there.
+     */
+    public function streamData(Stream $s, bool $decrypt = true, ?int $limit = null): ?string
+    {
+        $limit ??= $this->limit();
+        $cut = false;
+        $data = $this->decode($s, $decrypt, $limit, $cut);
+        if ($cut) {
+            $this->warn(sprintf('Stream %d is too large to unpack in the memory that is left (limit %s); the rest of it was left out', $s->num, self::size($limit)));
+        }
+        return $data;
+    }
+
+    /** The first $bytes of a stream's decoded contents. The rest is never unpacked, and that is not worth a warning. */
+    public function streamHead(Stream $s, int $bytes): ?string
+    {
+        $cut = false;
+        return $this->decode($s, true, $bytes, $cut);
+    }
+
+    private function decode(Stream $s, bool $decrypt, int $limit, bool &$cut): ?string
     {
         $filters = $this->resolve($s->dict['Filter'] ?? null);
         $filters = $filters === null ? [] : (is_array($filters) ? array_map($this->resolve(...), $filters) : [$filters]);
@@ -160,7 +224,12 @@ final class File
         if ($decrypt && $this->crypt !== null && ($s->dict['Type'] ?? null) !== '/XRef') {
             $raw = $this->crypt->decryptStream($raw, $s->num, $s->gen);
         }
-        return Filters::decode($raw, $filters, $parms);
+        return Filters::decode($raw, $filters, $parms, $limit, $cut);
+    }
+
+    private static function size(int $bytes): string
+    {
+        return $bytes >= 1048576 ? round($bytes / 1048576) . 'MB' : max(1, round($bytes / 1024)) . 'KB';
     }
 
     public function decryptString(PdfString $s, int $num, int $gen = 0): string
@@ -181,7 +250,13 @@ final class File
             }
         }
         // /Length is missing or wrong: take everything up to the endstream keyword.
-        $end = strpos($d, 'endstream', $s->start);
+        $end = false;
+        if ($s->start < $this->noEndstream) {
+            $end = strpos($d, 'endstream', $s->start);
+            if ($end === false) {
+                $this->noEndstream = $s->start;
+            }
+        }
         if ($end === false) {
             $end = strpos($d, 'endobj', $s->start);
         }
@@ -198,10 +273,15 @@ final class File
     private function fromObjectStream(int $container, int $num): mixed
     {
         if (!isset($this->objStreams[$container])) {
-            if (count($this->objStreams) >= self::OBJSTM_LIMIT) {
-                unset($this->objStreams[array_key_first($this->objStreams)]);
+            $loaded = $this->loadObjectStream($container);
+            // Keep few of them, and few bytes: each one can be as large as a stream may get.
+            $kept = array_sum(array_map(static fn(array $o): int => strlen($o[0]), $this->objStreams)) + strlen($loaded[0]);
+            while ($this->objStreams !== [] && (count($this->objStreams) >= self::OBJSTM_LIMIT || $kept > $this->limit())) {
+                $oldest = array_key_first($this->objStreams);
+                $kept -= strlen($this->objStreams[$oldest][0]);
+                unset($this->objStreams[$oldest]);
             }
-            $this->objStreams[$container] = $this->loadObjectStream($container);
+            $this->objStreams[$container] = $loaded;
         }
         [$data, $offsets] = $this->objStreams[$container];
         if (!isset($offsets[$num])) {
@@ -225,14 +305,16 @@ final class File
         }
         $data = $this->streamData($stream) ?? '';
         $first = (int)$this->resolve($stream->dict['First'] ?? 0);
-        $n = (int)$this->resolve($stream->dict['N'] ?? 0);
+        // Each pair of numbers in the header costs a PHP string or two, so how many are read depends on the memory
+        // that is left. A real header is about 20 bytes a pair, which is also how much of it is looked at.
+        $n = min((int)$this->resolve($stream->dict['N'] ?? 0), intdiv($this->room(), 2048));
         $offsets = [];
-        if (preg_match_all('/(\d+)\s+(\d+)/', substr($data, 0, $first), $m, PREG_SET_ORDER)) {
-            foreach ($m as $i => $pair) {
+        if (preg_match_all('/(\d+)\s+(\d+)/', substr($data, 0, min($first, $n * 24)), $m)) {
+            foreach ($m[1] as $i => $num) {
                 if ($i >= $n) {
                     break;
                 }
-                $offsets[(int)$pair[1]] = $first + (int)$pair[2];
+                $offsets[(int)$num] = $first + (int)$m[2][$i];
             }
         }
         return [$data, $offsets];
@@ -247,6 +329,9 @@ final class File
         }
         $queue = [(int)end($m[1])];
         $seen = [];
+        // Each section header may claim far more rows than follow it; copying the claimed amount every time
+        // would cost more than the file is worth, so the copying is limited to a few times the file's size.
+        $allowance = $total * 4 + 65536;
         while ($queue !== []) {
             $pos = array_shift($queue);
             if ($pos <= 0 || $pos >= $total || isset($seen[$pos])) {
@@ -263,6 +348,10 @@ final class File
                     $num = (int)$h[1];
                     $count = (int)$h[2];
                     $chunk = substr($d, $p, $count * 21 + 64);
+                    $allowance -= strlen($chunk);
+                    if ($allowance < 0) {
+                        throw new \RuntimeException('Cross-reference table is larger than the file');
+                    }
                     preg_match_all('/\G\s*(\d{1,10})\s+(\d{1,5})\s+([nf])/', $chunk, $rows, PREG_SET_ORDER);
                     $consumed = 0;
                     foreach ($rows as $i => $row) {
@@ -317,14 +406,16 @@ final class File
         if ($rowLen <= 0) {
             return;
         }
-        $data = $this->streamData($stream, false) ?? '';
+        // An entry takes at least a few bytes of the file, so a table longer than the file is not telling the truth.
+        $data = $this->streamData($stream, false, strlen($this->data) + 65536) ?? '';
         $index = is_array($dict['Index'] ?? null) ? $dict['Index'] : [0, (int)($dict['Size'] ?? 0)];
+        $entries = max(1 << 16, intdiv(strlen($this->data), 2));
         $pos = 0;
         $len = strlen($data);
         for ($s = 0; $s + 1 < count($index); $s += 2) {
             $num = (int)$index[$s];
             $count = (int)$index[$s + 1];
-            for ($i = 0; $i < $count && $pos + $rowLen <= $len; $i++, $pos += $rowLen) {
+            for ($i = 0; $i < $count && $pos + $rowLen <= $len && count($this->xref) < $entries; $i++, $pos += $rowLen) {
                 $type = $w0 === 0 ? 1 : self::beInt($data, $pos, $w0);
                 if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
                     continue;
@@ -364,7 +455,7 @@ final class File
     private function rebuild(): void
     {
         $this->rebuilt = true;
-        $this->warnings[] = 'Cross-reference table was missing or damaged; rebuilt by scanning the file';
+        $this->warn('Cross-reference table was missing or damaged; rebuilt by scanning the file');
         $d = $this->data;
         $xref = [];
         $containers = [];

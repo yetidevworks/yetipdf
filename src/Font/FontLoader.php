@@ -88,10 +88,10 @@ final class FontLoader
             $font = ($dict['Subtype'] ?? null) === '/Type0' ? $this->composite($dict) : $this->simple($dict);
             if ($font->unmapped) {
                 $name = $this->name($dict['BaseFont'] ?? null) ?: 'unnamed';
-                $this->file->warnings[] = "Font $name has no character map; text set in it may be missing or wrong";
+                $this->file->warn("Font $name has no character map; text set in it may be missing or wrong");
             }
         } catch (\Throwable $e) {
-            $this->file->warnings[] = 'Font could not be read (' . $e->getMessage() . '); using a default encoding';
+            $this->file->warn('Font could not be read (' . $e->getMessage() . '); using a default encoding');
             $font = new Font();
             $font->map = self::strtrMap(Encodings::table('WinAnsiEncoding'));
         }
@@ -437,12 +437,12 @@ final class FontLoader
         if (!$stream instanceof Stream) {
             return null;
         }
-        $data = $this->file->streamData($stream);
-        if ($data === null) {
+        // Only the clear-text start of the program holds the encoding, so only that much is unpacked.
+        $clear = (int)($this->file->resolve($stream->dict['Length1'] ?? 0) ?? 0);
+        $head = $this->file->streamHead($stream, $clear > 0 ? min($clear, 1 << 20) : 8192);
+        if ($head === null) {
             return null;
         }
-        $clear = (int)($this->file->resolve($stream->dict['Length1'] ?? 0) ?? 0);
-        $head = substr($data, 0, $clear > 0 ? $clear : 8192);
         if (!preg_match_all('/dup\s+(\d+)\s*\/([^\s\/]+)\s+put/', $head, $m, PREG_SET_ORDER)) {
             return null;
         }

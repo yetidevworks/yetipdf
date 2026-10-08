@@ -145,10 +145,18 @@ final class Document
     {
         $contents = $this->file->resolve($page['Contents'] ?? null);
         $parts = [];
+        // The pieces of a page are joined into one string, so together they get what one stream would.
+        $room = $this->file->limit();
         foreach ($contents instanceof Stream ? [$contents] : (is_array($contents) ? $contents : []) as $item) {
             $stream = $this->file->resolve($item);
             if ($stream instanceof Stream) {
-                $parts[] = $this->file->streamData($stream) ?? '';
+                if ($room <= 0) {
+                    $this->file->warn('The content of a page is too large for the memory that is left; the rest of it was left out');
+                    break;
+                }
+                $part = $this->file->streamData($stream, true, $room) ?? '';
+                $room -= strlen($part);
+                $parts[] = $part;
             }
         }
         $appearances = $this->options->annotations ? $this->appearances($page) : [];

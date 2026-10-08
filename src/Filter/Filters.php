@@ -15,12 +15,20 @@ final class Filters
         '/CCF' => true, '/JBIG2Decode' => true,
     ];
 
+    /** Largest result decode() allows when the caller does not say. */
+    private const MAX_OUTPUT = 512 << 20;
+    /** Longest image row the predictors will unpack; each byte of a row costs a PHP array slot. */
+    private const MAX_ROW = 65536;
+
     /**
      * @param list<mixed> $filters filter names, in the order they must be applied
      * @param list<mixed> $parms   decode parameter dictionaries, parallel to $filters
+     * @param int         $limit   most bytes any stage may produce; a stage that would go further is cut off there
+     * @param bool        $cut     set to true when output was cut off or dropped because of the limit
      */
-    public static function decode(string $data, array $filters, array $parms): ?string
+    public static function decode(string $data, array $filters, array $parms, int $limit = self::MAX_OUTPUT, bool &$cut = false): ?string
     {
+        $limit = max(1, $limit);
         foreach ($filters as $i => $filter) {
             if (!is_string($filter)) {
                 continue;
@@ -32,15 +40,15 @@ final class Filters
             switch ($filter) {
                 case '/FlateDecode':
                 case '/Fl':
-                    $data = self::predict(self::flate($data), $p);
+                    $data = self::predict(self::flate($data, $limit, $cut), $p, $cut);
                     break;
                 case '/LZWDecode':
                 case '/LZW':
-                    $data = self::predict(self::lzw($data, (int)($p['EarlyChange'] ?? 1)), $p);
+                    $data = self::predict(self::lzw($data, (int)($p['EarlyChange'] ?? 1), $limit, $cut), $p, $cut);
                     break;
                 case '/ASCII85Decode':
                 case '/A85':
-                    $data = self::ascii85($data);
+                    $data = self::ascii85($data, $limit, $cut);
                     break;
                 case '/ASCIIHexDecode':
                 case '/AHx':
@@ -48,11 +56,15 @@ final class Filters
                     break;
                 case '/RunLengthDecode':
                 case '/RL':
-                    $data = self::runLength($data);
+                    $data = self::runLength($data, $limit, $cut);
                     break;
                 default:
                     // /Crypt and anything unknown: pass the bytes through.
                     break;
+            }
+            if (strlen($data) > $limit) {
+                $data = substr($data, 0, $limit);
+                $cut = true;
             }
         }
         return $data;
@@ -68,20 +80,25 @@ final class Filters
         return false;
     }
 
-    public static function flate(string $data): string
+    /**
+     * Inflates zlib data. A stream whose result would pass $limit comes back cut off at $limit with $cut set,
+     * since a few kilobytes can legitimately (or not) expand a thousandfold.
+     */
+    public static function flate(string $data, int $limit = self::MAX_OUTPUT, bool &$cut = false): string
     {
         if ($data === '') {
             return '';
         }
-        $out = @gzuncompress($data);
+        $limit = max(1, $limit);
+        $out = @gzuncompress($data, $limit);
         if ($out !== false) {
             return $out;
         }
-        $out = @gzinflate($data);
+        $out = @gzinflate($data, $limit);
         if ($out !== false) {
             return $out;
         }
-        // Damaged or truncated: feed the decoder in pieces and keep whatever comes out before it gives up.
+        // Damaged, truncated or too big: feed the decoder in pieces and keep whatever comes out before it gives up.
         $best = '';
         foreach ([ZLIB_ENCODING_DEFLATE, ZLIB_ENCODING_RAW] as $encoding) {
             $ctx = @inflate_init($encoding);
@@ -96,6 +113,10 @@ final class Filters
                     break;
                 }
                 $out .= $chunk;
+                if (strlen($out) > $limit) {
+                    $cut = true;
+                    return substr($out, 0, $limit);
+                }
             }
             if (strlen($out) > strlen($best)) {
                 $best = $out;
@@ -104,8 +125,13 @@ final class Filters
         return $best;
     }
 
-    /** @param array<string, mixed> $p */
-    public static function predict(string $data, array $p): string
+    /**
+     * Undoes a PNG or TIFF predictor. Rows longer than MAX_ROW are not unpacked: the stream comes back empty and
+     * $cut is set, because a tiny stream could otherwise ask for an array of billions of slots.
+     *
+     * @param array<string, mixed> $p
+     */
+    public static function predict(string $data, array $p, bool &$cut = false): string
     {
         $predictor = (int)($p['Predictor'] ?? 1);
         if ($predictor <= 1 || $data === '') {
@@ -114,20 +140,31 @@ final class Filters
         $colors = max(1, (int)($p['Colors'] ?? 1));
         $bpc = max(1, (int)($p['BitsPerComponent'] ?? 8));
         $columns = max(1, (int)($p['Columns'] ?? 1));
+        if ($colors > 256 || $bpc > 16 || $columns > self::MAX_ROW * 8) {
+            $cut = true;
+            return '';
+        }
         $bpp = max(1, intdiv($colors * $bpc + 7, 8));
         $rowLen = intdiv($colors * $bpc * $columns + 7, 8);
+        if ($rowLen > self::MAX_ROW) {
+            $cut = true;
+            return '';
+        }
 
         if ($predictor === 2) {
             if ($bpc !== 8) {
                 return $data;
             }
             $out = '';
-            foreach (str_split($data, $rowLen) as $row) {
-                $b = array_values(unpack('C*', $row));
-                for ($i = $bpp, $n = count($b); $i < $n; $i++) {
-                    $b[$i] = ($b[$i] + $b[$i - $bpp]) & 0xFF;
+            // Split in blocks of whole rows, so a stream of one-byte rows does not become millions of strings at once.
+            foreach (str_split($data, $rowLen * max(1, intdiv(self::MAX_ROW, $rowLen))) as $block) {
+                foreach (str_split($block, $rowLen) as $row) {
+                    $b = array_values(unpack('C*', $row));
+                    for ($i = $bpp, $n = count($b); $i < $n; $i++) {
+                        $b[$i] = ($b[$i] + $b[$i - $bpp]) & 0xFF;
+                    }
+                    $out .= pack('C*', ...$b);
                 }
-                $out .= pack('C*', ...$b);
             }
             return $out;
         }
@@ -180,7 +217,7 @@ final class Filters
         return $out;
     }
 
-    public static function lzw(string $data, int $earlyChange = 1): string
+    public static function lzw(string $data, int $earlyChange = 1, int $limit = self::MAX_OUTPUT, bool &$cut = false): string
     {
         $out = '';
         $table = [];
@@ -214,12 +251,22 @@ final class Filters
                     $entry = $table[$code] ?? '';
                 } elseif (isset($table[$code])) {
                     $entry = $table[$code];
-                    $table[$next++] = $prev . $entry[0];
+                    // A 12-bit code can never name an entry past 4095, so a stream that never clears
+                    // the table would only be piling up strings nobody can read back.
+                    if ($next < 4096) {
+                        $table[$next++] = $prev . $entry[0];
+                    }
                 } else {
                     $entry = $prev . $prev[0];
-                    $table[$next++] = $entry;
+                    if ($next < 4096) {
+                        $table[$next++] = $entry;
+                    }
                 }
                 $out .= $entry;
+                if (strlen($out) > $limit) {
+                    $cut = true;
+                    return substr($out, 0, $limit);
+                }
                 $prev = $entry === '' ? null : $entry;
                 if ($next + $earlyChange >= (1 << $bits) && $bits < 12) {
                     $bits++;
@@ -229,7 +276,7 @@ final class Filters
         return $out;
     }
 
-    public static function ascii85(string $data): string
+    public static function ascii85(string $data, int $limit = self::MAX_OUTPUT, bool &$cut = false): string
     {
         $end = strpos($data, '~>');
         if ($end !== false) {
@@ -246,6 +293,11 @@ final class Filters
             if ($data[$i] === 'z') {
                 $out .= "\0\0\0\0";
                 $i++;
+                if (strlen($out) > $limit) {
+                    // A run of z is four bytes of output for one of input.
+                    $cut = true;
+                    break;
+                }
                 continue;
             }
             $group = substr($data, $i, 5);
@@ -277,7 +329,7 @@ final class Filters
         return $data === '' ? '' : (string)hex2bin($data);
     }
 
-    public static function runLength(string $data): string
+    public static function runLength(string $data, int $limit = self::MAX_OUTPUT, bool &$cut = false): string
     {
         $out = '';
         $len = strlen($data);
@@ -292,6 +344,10 @@ final class Filters
                 $i += $n + 1;
             } elseif ($i < $len) {
                 $out .= str_repeat($data[$i++], 257 - $n);
+            }
+            if (strlen($out) > $limit) {
+                $cut = true;
+                break;
             }
         }
         return $out;
