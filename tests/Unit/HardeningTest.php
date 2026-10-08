@@ -8,6 +8,9 @@ use PHPUnit\Framework\TestCase;
 use YetiPdf\Core\File;
 use YetiPdf\Document;
 use YetiPdf\Filter\Filters;
+use YetiPdf\Font\CMap;
+use YetiPdf\Font\Ranges;
+use YetiPdf\Font\Utf;
 use YetiPdf\Options;
 use YetiPdf\Tests\PdfBuilder;
 use YetiPdf\YetiPdf;
@@ -188,5 +191,88 @@ final class HardeningTest extends TestCase
 
         $this->assertSame("a\nb", $plain);
         $this->assertSame($plain, $long);
+    }
+
+    public function testRangesFindTheEarliestRangeThatHoldsACode(): void
+    {
+        mt_srand(7);
+        $ranges = [];
+        for ($i = 0; $i < 300; $i++) {
+            $low = mt_rand(0, 2000);
+            $ranges[] = [$low, $low + mt_rand(-5, 400)];
+        }
+        $index = new Ranges($ranges);
+
+        for ($code = -3; $code < 2500; $code++) {
+            $expected = null;
+            foreach ($ranges as $id => [$low, $high]) {
+                if ($code >= $low && $code <= $high) {
+                    $expected = $id;
+                    break;
+                }
+            }
+            $this->assertSame($expected, $index->find($code), "code $code");
+        }
+        $this->assertNull((new Ranges([]))->find(5));
+    }
+
+    public function testWideRangesAreLookedUpWithTheSamePrecedenceAsExpandedOnes(): void
+    {
+        $cmap = CMap::parse("begincodespacerange <0000> <FFFF> endcodespacerange\n"
+            . "beginbfchar <0010> <0058> endbfchar\n"
+            . "beginbfrange\n<0000> <0FFF> <0100>\n<0800> <17FF> <0200>\n<2000> <2FFF> <0300>\n<0020> <0022> <0061>\nendbfrange");
+
+        $this->assertSame('X', $cmap->get(0x10));
+        $this->assertSame('abc', $cmap->get(0x20) . $cmap->get(0x21) . $cmap->get(0x22));
+        $this->assertSame(Utf::chr(0x100 + 0x40), $cmap->get(0x40));
+        $this->assertSame(Utf::chr(0x100 + 0x900), $cmap->get(0x900));
+        $this->assertSame(Utf::chr(0x200 + 0x800), $cmap->get(0x1000));
+        $this->assertSame(Utf::chr(0x300 + 0x10), $cmap->get(0x2010));
+        $this->assertNull($cmap->get(0x1800));
+        $this->assertNull($cmap->get(0x3000));
+    }
+
+    public function testThousandsOfFourByteRangesCostAboutAsMuchAsTheirText(): void
+    {
+        $ranges = '';
+        for ($i = 0; $i < 20000; $i++) {
+            $ranges .= sprintf("<%08X> <%08X> <0041>\n", $i * 512, $i * 512 + 511);
+        }
+        $data = "begincodespacerange <00000000> <FFFFFFFF> endcodespacerange\nbeginbfrange\n$ranges endbfrange";
+        $cmap = CMap::parse($data);
+
+        // Expanding them all would be ten million entries; what is expanded is about one for each byte of the CMap.
+        $this->assertLessThan(strlen($data) * 2, count($cmap->map));
+        foreach ([0, 5, 511, 512, 100000, 19999 * 512 + 511] as $code) {
+            $this->assertSame(Utf::chr(0x41 + $code % 512), $cmap->get($code));
+        }
+        $this->assertNull($cmap->get(20000 * 512));
+    }
+
+    public function testATargetTooLongToBeRealIsIgnored(): void
+    {
+        $long = str_repeat('0041', 600);
+        $cmap = CMap::parse("beginbfchar <01> <$long> <02> <0042> endbfchar\nbeginbfrange <10> <1F> <$long> endbfrange");
+
+        $this->assertSame('', $cmap->get(1));
+        $this->assertSame('B', $cmap->get(2));
+        $this->assertNull($cmap->get(0x10));
+    }
+
+    public function testASectionTooBigForTheMemoryLeftIsLeftOutAndSaysSo(): void
+    {
+        $body = '';
+        for ($i = 0; $i < 3000; $i++) {
+            $body .= sprintf("<%04X> <%04X>\n", $i, 0x4E00 + $i);
+        }
+        $data = "beginbfchar\n$body endbfchar";
+
+        $full = CMap::parse($data);
+        $this->assertFalse($full->partial);
+        $this->assertSame(Utf::chr(0x4E00 + 7), $full->get(7));
+
+        $tight = CMap::parse($data, 100000);
+        $this->assertTrue($tight->partial);
+        $this->assertNull($tight->get(7));
     }
 }

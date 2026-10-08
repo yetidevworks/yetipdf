@@ -265,7 +265,7 @@ final class FontLoader
 
         $encoding = $file->resolve($dict['Encoding'] ?? null);
         if ($encoding instanceof Stream) {
-            $cmap = CMap::parse($file->streamData($encoding) ?? '');
+            $cmap = $this->parseCMap($file->streamData($encoding) ?? '');
             $this->applyCodeLengths($font, $cmap);
         } elseif (is_string($encoding)) {
             if (preg_match(self::UNICODE_CMAPS, $encoding)) {
@@ -405,6 +405,15 @@ final class FontLoader
         }
     }
 
+    private function parseCMap(string $data): CMap
+    {
+        $cmap = CMap::parse($data, $this->file->room());
+        if ($cmap->partial) {
+            $this->file->warn('A character map is too large to read in the memory that is left; part of it was left out');
+        }
+        return $cmap;
+    }
+
     /** @param array<string, mixed> $dict */
     private function toUnicode(array $dict): ?CMap
     {
@@ -416,11 +425,11 @@ final class FontLoader
         if ($data === null || $data === '') {
             return null;
         }
-        $cmap = CMap::parse($data);
+        $cmap = $this->parseCMap($data);
         // Some writers compress a ToUnicode stream and forget to declare /FlateDecode. A zlib header (0x78 and a
         // checksum that divides by 31) is unlikely to start real CMap text, so inflate it once and read again.
         if ($cmap->isEmpty() && strlen($data) > 2 && (ord($data[0]) & 0x0F) === 8 && ((ord($data[0]) << 8) | ord($data[1])) % 31 === 0) {
-            $cmap = CMap::parse(Filters::flate($data));
+            $cmap = $this->parseCMap(Filters::flate($data, $this->file->limit()));
         }
         return $cmap->isEmpty() ? null : $cmap;
     }

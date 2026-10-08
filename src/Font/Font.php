@@ -18,6 +18,8 @@ final class Font
     public const GAP = "\x1F";
     /** Width, in text units, from which such a glyph counts as a gap between words. */
     public const GAP_WIDTH = 0.1;
+    /** Bytes of text the two caches below may hold; a character map can make one code stand for a lot of text. */
+    private const CACHE_BYTES = 8 << 20;
 
     /** Single-byte codes (Type1, TrueType, Type3) or multi-byte (Type0). */
     public bool $simple = true;
@@ -55,10 +57,12 @@ final class Font
 
     /** @var array<string, array{0: string, 1: float, 2: int, 3: int}> */
     private array $memo = [];
+    private int $memoBytes = 0;
     /** @var array<int, string> composite code => text */
     private array $codeText = [];
     /** @var array<int|string, string>|null byte (simple) or code (composite) => text as drawn() gives it */
     private ?array $turned = null;
+    private int $codeTextBytes = 0;
 
     public function decode(string $s): string
     {
@@ -99,10 +103,12 @@ final class Font
         }
 
         if (strlen($s) <= 48) {
-            if (count($this->memo) >= self::MEMO_LIMIT) {
+            if (count($this->memo) >= self::MEMO_LIMIT || $this->memoBytes > self::CACHE_BYTES) {
                 $this->memo = [];
+                $this->memoBytes = 0;
             }
             $this->memo[$s] = [$text, $this->w, $this->n, $this->sp];
+            $this->memoBytes += strlen($text);
         }
         return $text;
     }
@@ -242,6 +248,12 @@ final class Font
         if (!$this->rtl && $text >= "\xD6" && preg_match(Utf::RIGHT_TO_LEFT, $text)) {
             $this->rtl = true;
         }
+        if ($this->codeTextBytes > self::CACHE_BYTES) {
+            $this->codeText = [];
+            $this->turned = null;
+            $this->codeTextBytes = 0;
+        }
+        $this->codeTextBytes += strlen($text) + 64;
         return $this->codeText[$code] = $text;
     }
 }
