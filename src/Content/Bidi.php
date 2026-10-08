@@ -22,9 +22,12 @@ final class Bidi
     private const OTHER = 4;
     private const LONGEST_LINE = 16384;
 
-    /** Right-to-left letters and marks, without the two sets of Arabic digits: those read left to right. */
-    private const R = '\x{0590}-\x{065F}\x{066A}-\x{06EF}\x{06FA}-\x{08FF}\x{FB1D}-\x{FDFF}\x{FE70}-\x{FEFC}';
-    private const DIGITS = '0-9\x{0660}-\x{0669}\x{06F0}-\x{06F9}';
+    /** Right-to-left letters and marks, without the two sets of Arabic digits and what goes with them: those read left to right. */
+    private const R = '\x{0590}-\x{065F}\x{066D}-\x{06EF}\x{06FA}-\x{08FF}\x{FB1D}-\x{FDFF}\x{FE70}-\x{FEFC}';
+    /** Digits, and the Arabic decimal and thousands separators, which only ever sit inside a number. */
+    private const DIGITS = '0-9\x{0660}-\x{0669}\x{066B}\x{066C}\x{06F0}-\x{06F9}';
+    /** Signs that belong to the number they touch and are read with it: "50%", "$5.00", "25°". */
+    private const SIGNS = '/^[#%°±‰‱′″\p{Sc}]$/u';
 
     /** A run of right-to-left letters, a run of digits, a word in any other script, or one character of anything else. */
     private const TOKENS = '/([' . self::R . ']+)|([' . self::DIGITS . ']+)|((?:(?![' . self::R . '])[\p{L}\p{M}])+)|(.)/us';
@@ -108,6 +111,10 @@ final class Bidi
             // Words join across spaces and punctuation, and take the numbers after them along.
             // Numbers on their own join only across a separator inside them, or straight into a word ("3D").
             $word = $class === self::LEFT;
+            // A sign written straight in front of a number came out as a piece of its own just now. It belongs to the number.
+            while ($pieces !== [] && $text[0] >= '0' && $text[0] <= '9' && self::sign($pieces[count($pieces) - 1])) {
+                $text = array_pop($pieces) . $text;
+            }
             while (true) {
                 $between = '';
                 for ($k = $i + 1; $k < $n && $tokens[$k][0] === self::OTHER; $k++) {
@@ -122,6 +129,12 @@ final class Bidi
                 }
                 break;
             }
+            // And so does one written straight after it.
+            $last = $text[strlen($text) - 1];
+            while ($last >= '0' && $last <= '9' && ($tokens[$i + 1][0] ?? 0) === self::OTHER && self::sign($tokens[$i + 1][1])) {
+                $text .= $tokens[++$i][1];
+                $last = '';
+            }
             $pieces[] = $text;
         }
         $out = implode('', array_reverse($pieces));
@@ -132,6 +145,11 @@ final class Bidi
             $out = strtr($out, '()[]{}', ')(][}{');
         }
         return $out;
+    }
+
+    private static function sign(string $text): bool
+    {
+        return strlen($text) <= 4 && preg_match(self::SIGNS, $text) === 1;
     }
 
     private static function separator(string $between): bool

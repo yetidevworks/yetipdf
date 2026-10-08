@@ -50,6 +50,13 @@ final class RightToLeftTest extends TestCase
             "\u{0661}\u{0662}\u{0663} \u{0645}\u{0642}\u{0631}",
             "\u{0631}\u{0642}\u{0645} \u{0661}\u{0662}\u{0663}",
         ];
+        yield 'a percent sign stays behind its number' => [self::r('דהו') . ' 50% ' . self::r('אבג'), 'אבג' . ' 50% ' . 'דהו'];
+        yield 'a currency sign stays in front of its number' => ['$5.00 ' . self::r('דהו'), 'דהו' . ' $5.00'];
+        // U+066B is the Arabic decimal separator: 3.5 in Arabic-Indic digits.
+        yield 'an Arabic decimal keeps its digits in order' => [
+            "\u{0663}\u{066B}\u{0665} \u{0645}\u{0642}\u{0631}",
+            "\u{0631}\u{0642}\u{0645} \u{0663}\u{066B}\u{0665}",
+        ];
         yield 'nothing right-to-left' => ['Hello, world 42', 'Hello, world 42'];
     }
 
