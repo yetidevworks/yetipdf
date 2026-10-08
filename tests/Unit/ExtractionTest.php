@@ -154,4 +154,20 @@ final class ExtractionTest extends TestCase
         $this->expectException(InvalidPdfException::class);
         YetiPdf::parse('just some text');
     }
+
+    public function testSinglePageMatchesIterationAndOutOfRangeIsEmpty(): void
+    {
+        $pdf = PdfBuilder::build([
+            'BT /F1 12 Tf 72 720 Td (One) Tj ET',
+            'BT /F1 12 Tf 72 720 Td (Two) Tj ET',
+            'BT /F1 12 Tf 72 720 Td (Three) Tj ET',
+        ]);
+        $doc = YetiPdf::parse($pdf);
+
+        foreach (iterator_to_array($doc->pages()) as $number => $text) {
+            $this->assertSame($text, $doc->page($number));
+        }
+        $this->assertSame('', $doc->page(0));
+        $this->assertSame('', $doc->page(4));
+    }
 }

@@ -58,11 +58,19 @@ final class Document
         }
     }
 
+    /** Text of one page, numbered from 1. Only that page is read; the ones before it are stepped over. */
     public function page(int $number): string
     {
-        foreach ($this->pages() as $n => $text) {
-            if ($n === $number) {
-                return $text;
+        $n = 0;
+        foreach ($this->walk() as [$page, $resources]) {
+            if (++$n !== $number) {
+                continue;
+            }
+            try {
+                return $this->pageText($page, $resources);
+            } catch (\Throwable $e) {
+                $this->warnings[] = "Page $number could not be read: " . $e->getMessage();
+                return '';
             }
         }
         return '';
