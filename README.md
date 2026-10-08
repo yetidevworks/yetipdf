@@ -12,12 +12,12 @@ Here are six real documents, one at a time, on PHP 8.4 with no JIT. **pdftotext*
 
 | Document | Pages | YetiPDF | pdftotext | PrinsFrank | smalot |
 |---|---|---|---|---|---|
-| PostgreSQL 16 manual | 3,057 | **1.80s** | 2.22s | 8.13s | 41.06s |
-| NIST SP 800-53 | 492 | **0.66s** | 0.83s | 2.91s | 51.57s |
+| PostgreSQL 16 manual | 3,057 | **1.63s** | 2.22s | 8.13s | 41.06s |
+| NIST SP 800-53 | 492 | **0.62s** | 0.83s | 2.91s | 51.57s |
 | IRS Publication 17 | 142 | **0.35s** | 0.41s | 1.82s | 5.64s |
-| The Memoir Class manual | 625 | **0.43s** | 1.01s | failed | 6.24s |
-| RFC 9110 | 194 | **0.17s** | 0.26s | 0.68s | 15.91s |
-| Pro Git | 501 | **0.13s** | 0.29s | 0.88s | 0.68s |
+| The Memoir Class manual | 625 | **0.41s** | 1.01s | failed | 6.24s |
+| RFC 9110 | 194 | **0.16s** | 0.26s | 0.68s | 15.91s |
+| Pro Git | 501 | **0.10s** | 0.29s | 0.88s | 0.68s |
 
 Yes, that's PHP beating a C++ binary. The PostgreSQL manual is just over a million words, and YetiPDF reads all of it in under two seconds.
 
@@ -29,8 +29,8 @@ Memory matters just as much if you're running on a 256MB host:
 |---|---|---|---|---|
 | PostgreSQL 16 manual | 67MB | 72MB | 48MB | 430MB |
 | NIST SP 800-53 | 52MB | 71MB | 71MB | 193MB |
-| IRS Publication 17 | 45MB | 29MB | 82MB | 193MB |
-| Pro Git | 31MB | 17MB | 27MB | 779MB |
+| IRS Publication 17 | 46MB | 29MB | 82MB | 193MB |
+| Pro Git | 32MB | 17MB | 27MB | 779MB |
 
 Those figures are for pulling the whole document into one string. Read it a page at a time, as in the example below, and the PostgreSQL manual peaks at 55MB.
 
@@ -46,11 +46,11 @@ I tested against 218 PDFs. Twenty are ordinary documents: research papers, tax f
 | Words recovered | **99.8%** | 88.7% | 93.9% |
 | Documents scoring 95% or better | **190** | 113 | 120 |
 | Ordinary documents scoring 95% or better | **19 of 20** | 14 | 13 |
-| Time for all 218 | **5.8s** | 22.5s | 147.2s |
+| Time for all 218 | **5.4s** | 22.5s | 147.2s |
 
 Two things about that table. `pdftotext` is a reference and not the truth, so when YetiPDF and `pdftotext` disagree and YetiPDF is the one that's right, it still loses points. The one ordinary document under 95% is a NIST standard where `pdftotext` turns the small-caps heading into "dvanced ncryption tandard". And most of the files that score badly are ones nothing can read, because the PDF never says which character each glyph stands for.
 
-I also ran all 1,009 PDFs in the pdf.js collection through it, including the ones with no text. Nothing crashed and nothing hung. The lot took 15 seconds.
+I also ran all 1,009 PDFs in the combined corpus, including the ones with no text. Nothing crashed and nothing hung. Nine encrypted PDFs needed passwords; the other 1,000 were read. The full run took 15 seconds, including starting a separate PHP process for each PDF.
 
 ## Install
 
@@ -156,7 +156,7 @@ php benchmarks/diff.php some.pdf                   # which words differ from pdf
 
 You'll need `pdftotext` installed, since it's the reference. If you find a PDF that **YetiPDF** reads badly, `diff.php` shows exactly which words went missing, and I'd love to see it in an issue.
 
-The numbers above came from an Apple Silicon Mac. The single-document timings are each tool run alone, best of three (smalot got one run, for obvious reasons), and the 218-file totals ran six files at a time.
+The numbers above came from an Apple Silicon Mac. The single-document timings are each tool run alone, best of three (smalot got one run, for obvious reasons). The 218-file totals add up the per-file extraction times, with six files running at once. YetiPDF's figures were refreshed on PHP 8.4.25 after the font optimization; the other tools' figures are from the original benchmark run.
 
 ## Tests
 

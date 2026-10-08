@@ -363,7 +363,12 @@ final class FontLoader
     {
         $map = [];
         for ($i = 0; $i < 256; $i++) {
-            $map[chr($i)] = $table[$i] ?? '';
+            $byte = chr($i);
+            $text = $table[$i] ?? '';
+            // strtr() already leaves bytes without a replacement unchanged.
+            if ($text !== $byte) {
+                $map[$byte] = $text;
+            }
         }
         return $map;
     }

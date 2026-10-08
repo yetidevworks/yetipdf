@@ -17,7 +17,7 @@ final class Font
 
     /** Single-byte codes (Type1, TrueType, Type3) or multi-byte (Type0). */
     public bool $simple = true;
-    /** Simple fonts: byte => text, in the form strtr() wants. */
+    /** Simple fonts: byte => replacement text for strtr(); omitted bytes are unchanged. */
     public array $map = [];
     /** Code (simple) or CID (composite) => glyph width in glyph units. */
     public array $widths = [];
