@@ -45,29 +45,40 @@ final class CMap implements CodeMap
         $expandable = min(max(self::EXPAND_FLOOR, self::EXPAND_PER_BYTE * strlen($data)), intdiv($room, 4));
         // Reading a section costs about fifteen bytes for each byte of it, and up to thirty for one written to cost the most.
         $largest = intdiv($room, 64);
+        // All the sections together get twice that: what is kept from each costs several times its size as well.
+        $allowed = intdiv($room, 32);
+        $seen = [];
 
         foreach (self::sections($data, 'begincodespacerange', 'endcodespacerange') as $section) {
-            if (strlen($section) > $largest || preg_match_all(self::PAIR, $section, $pairs) === false) {
+            $size = strlen($section);
+            if ($size > $largest || $size > $allowed || preg_match_all(self::PAIR, $section, $pairs) === false) {
                 $cmap->partial = true;
                 continue;
             }
+            $allowed -= $size;
             foreach ($pairs[1] as $i => $first) {
                 $lo = self::clean($first);
                 $hi = self::clean($pairs[2][$i]);
                 $bytes = intdiv(strlen($lo) + 1, 2);
-                if ($bytes >= 1 && $bytes <= 4) {
+                // The same range a million times over is one range, and a few thousand different ones is past any real map.
+                if ($bytes >= 1 && $bytes <= 4 && !isset($seen["$lo-$hi"]) && count($seen) < 4096) {
+                    $seen["$lo-$hi"] = true;
                     $cmap->lengths[$bytes] = true;
                     $cmap->codespaces[] = [$bytes, (int)hexdec($lo), (int)hexdec($hi)];
                 }
             }
         }
+        unset($seen);
+        $cmap->codespaces = self::joined($cmap->codespaces);
         $declared = $cmap->lengths !== [];
 
         foreach (self::sections($data, 'beginbfchar', 'endbfchar') as $section) {
-            if (strlen($section) > $largest || preg_match_all(self::PAIR, $section, $pairs) === false) {
+            $size = strlen($section);
+            if ($size > $largest || $size > $allowed || preg_match_all(self::PAIR, $section, $pairs) === false) {
                 $cmap->partial = true;
                 continue;
             }
+            $allowed -= $size;
             foreach ($pairs[1] as $i => $first) {
                 $src = self::clean($first);
                 if ($src === '' || strlen($src) > 8) {
@@ -82,10 +93,12 @@ final class CMap implements CodeMap
 
         foreach (self::sections($data, 'beginbfrange', 'endbfrange') as $section) {
             // Each token is "<hex>", "[" or "]". One flat list of them is a tenth of the memory that a list of matches with groups takes.
-            if (strlen($section) > $largest || preg_match_all('/<[0-9A-Fa-f\s]*>|[\[\]]/', $section, $found) === false) {
+            $size = strlen($section);
+            if ($size > $largest || $size > $allowed || preg_match_all('/<[0-9A-Fa-f\s]*>|[\[\]]/', $section, $found) === false) {
                 $cmap->partial = true;
                 continue;
             }
+            $allowed -= $size;
             $tokens = $found[0];
             unset($found);
             $n = count($tokens);
@@ -159,6 +172,33 @@ final class CMap implements CodeMap
         }
         [$lo, , $prefix, $last] = $this->ranges[$range];
         return $prefix . Utf::chr($last + $code - $lo);
+    }
+
+    /**
+     * Code space ranges with those of one length that overlap or touch made into one, and no more than 16 of
+     * them. A real map has a handful, and every code that is read is checked against each.
+     *
+     * @param list<array{0: int, 1: int, 2: int}> $spaces
+     * @return list<array{0: int, 1: int, 2: int}>
+     */
+    private static function joined(array $spaces): array
+    {
+        if (!isset($spaces[1])) {
+            return $spaces;
+        }
+        usort($spaces, static fn(array $a, array $b): int => [$a[0], $a[1]] <=> [$b[0], $b[1]]);
+        $out = [];
+        foreach ($spaces as $space) {
+            $last = count($out) - 1;
+            if ($last >= 0 && $out[$last][0] === $space[0] && $space[1] <= $out[$last][2] + 1) {
+                if ($space[2] > $out[$last][2]) {
+                    $out[$last][2] = $space[2];
+                }
+                continue;
+            }
+            $out[] = $space;
+        }
+        return array_slice($out, 0, 16);
     }
 
     /**
