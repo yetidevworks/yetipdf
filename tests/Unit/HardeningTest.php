@@ -6,9 +6,12 @@ namespace YetiPdf\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use YetiPdf\Core\File;
+use YetiPdf\Core\Ref;
 use YetiPdf\Document;
 use YetiPdf\Filter\Filters;
 use YetiPdf\Font\CMap;
+use YetiPdf\Font\Font;
+use YetiPdf\Font\FontLoader;
 use YetiPdf\Font\Ranges;
 use YetiPdf\Font\Utf;
 use YetiPdf\Options;
@@ -274,5 +277,60 @@ final class HardeningTest extends TestCase
         $tight = CMap::parse($data, 100000);
         $this->assertTrue($tight->partial);
         $this->assertNull($tight->get(7));
+    }
+
+    private static function compositeFont(string $w): Font
+    {
+        $pdf = PdfBuilder::build([], ['F1' => '/Subtype /Type0 /BaseFont /X /Encoding /Identity-H /DescendantFonts [100 0 R]'],
+            [100 => "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /X /DW 1000 /W [$w] >>"]);
+        return (new FontLoader(new File($pdf)))->load(new Ref(10));
+    }
+
+    private static function widthOf(Font $font, int $cid): float
+    {
+        $font->decode(pack('n', $cid));
+        return $font->w;
+    }
+
+    public function testWideWidthRangesGiveTheWidthsTheyWouldWhenWrittenOut(): void
+    {
+        $font = self::compositeFont('0 1000 300  10 [500 510 520]  500 1500 400  40 45 777');
+
+        $this->assertNotNull($font->widthIndex);
+        $this->assertSame([], $font->widths);
+        $expected = [0 => 0.3, 9 => 0.3, 10 => 0.5, 11 => 0.51, 12 => 0.52, 13 => 0.3, 39 => 0.3, 40 => 0.777, 45 => 0.777, 46 => 0.3,
+            499 => 0.3, 500 => 0.4, 1000 => 0.4, 1500 => 0.4, 1501 => 1.0, 60000 => 1.0];
+        foreach ($expected as $cid => $width) {
+            $this->assertEqualsWithDelta($width, self::widthOf($font, $cid), 1e-9, "cid $cid");
+        }
+        // The same code twice, the second time from the cache.
+        $this->assertEqualsWithDelta(0.4, self::widthOf($font, 700), 1e-9);
+        $this->assertEqualsWithDelta(0.4, self::widthOf($font, 700), 1e-9);
+    }
+
+    public function testAnEntryBeforeAWideRangeLosesToItAndAnEntryAfterWinsOverIt(): void
+    {
+        $font = self::compositeFont('10 [500]  0 1000 300  20 [600]');
+
+        $this->assertEqualsWithDelta(0.3, self::widthOf($font, 10), 1e-9);
+        $this->assertEqualsWithDelta(0.6, self::widthOf($font, 20), 1e-9);
+    }
+
+    public function testFontsWithOnlyNarrowRangesKeepTheirWidthsInTheArray(): void
+    {
+        $font = self::compositeFont('0 [500 600] 10 20 450');
+
+        $this->assertNull($font->widthIndex);
+        $this->assertSame(500.0, $font->widths[0]);
+        $this->assertSame(450.0, $font->widths[15]);
+        $this->assertEqualsWithDelta(0.45, self::widthOf($font, 15), 1e-9);
+    }
+
+    public function testThousandsOfWideWidthRangesAreNotWrittenOut(): void
+    {
+        $font = self::compositeFont(str_repeat('0 65535 500 ', 3000));
+
+        $this->assertSame([], $font->widths);
+        $this->assertEqualsWithDelta(0.5, self::widthOf($font, 40000), 1e-9);
     }
 }

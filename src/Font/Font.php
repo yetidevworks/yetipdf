@@ -28,6 +28,13 @@ final class Font
     /** Code (simple) or CID (composite) => glyph width in glyph units. */
     public array $widths = [];
     public float $defaultWidth = 500.0;
+    /**
+     * Composite fonts whose /W has ranges too wide to write out hold all their widths here instead of in $widths:
+     * the ranges, flattened so that later entries win, and the width of each one.
+     */
+    public ?Ranges $widthIndex = null;
+    /** @var list<float> */
+    public array $rangeWidths = [];
     /** Glyph units to text units: 0.001 for everything except Type3 fonts. */
     public float $scale = 0.001;
 
@@ -63,6 +70,8 @@ final class Font
     /** @var array<int|string, string>|null byte (simple) or code (composite) => text as drawn() gives it */
     private ?array $turned = null;
     private int $codeTextBytes = 0;
+    /** @var array<int, float> composite code => width, for fonts with $widthIndex */
+    private array $widthCache = [];
 
     public function decode(string $s): string
     {
@@ -183,12 +192,13 @@ final class Font
         $sp = 0;
         $widths = $this->widths;
         $dw = $this->defaultWidth;
+        $ranged = $this->widthIndex !== null;
 
         if ($this->codespaces === []) {
             $codes = $this->codeBytes === 1 ? unpack('C*', $s) : unpack('n*', strlen($s) & 1 ? $s . "\0" : $s);
             foreach ($codes ?: [] as $code) {
                 $text .= $this->codeText[$code] ?? $this->lookup($code);
-                $w += $widths[$code] ?? $dw;
+                $w += $widths[$code] ?? ($ranged ? $this->rangeWidth($code) : $dw);
                 $n++;
             }
             if ($this->codeBytes === 1) {
@@ -219,7 +229,7 @@ final class Font
                     $sp++;
                 }
                 $text .= $this->codeText[$code] ?? $this->lookup($code);
-                $w += $widths[$code] ?? $dw;
+                $w += $widths[$code] ?? ($ranged ? $this->rangeWidth($code) : $dw);
                 $n++;
                 $i += $matched;
             }
@@ -229,6 +239,18 @@ final class Font
         $this->n = $n;
         $this->sp = $sp;
         return $text;
+    }
+
+    private function rangeWidth(int $code): float
+    {
+        if (isset($this->widthCache[$code])) {
+            return $this->widthCache[$code];
+        }
+        $range = $this->widthIndex?->find($code);
+        if (count($this->widthCache) >= 65536) {
+            $this->widthCache = [];
+        }
+        return $this->widthCache[$code] = $range === null ? $this->defaultWidth : $this->rangeWidths[$range];
     }
 
     private function lookup(int $code): string

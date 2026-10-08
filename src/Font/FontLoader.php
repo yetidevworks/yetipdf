@@ -62,6 +62,9 @@ final class FontLoader
         return $t;
     }
 
+    /** A /W range at least this wide is kept as a range. Real fonts that spell out wide ranges are rare. */
+    private const WIDE_RANGE = 64;
+
     private const UNICODE_CMAPS = '/^\/Uni(?:GB|CNS|JIS|JISX0213|JISX02132004|JIS2004|JISPro|KS)-(?:UCS2|UTF16)(?:-HW)?-[HV]$/';
     private const CHARSETS = [
         '90ms-RKSJ' => 'SJIS-win', '90msp-RKSJ' => 'SJIS-win', '90pv-RKSJ' => 'SJIS-win', '83pv-RKSJ' => 'SJIS-win',
@@ -398,11 +401,50 @@ final class FontLoader
             }
             $width = (float)$file->resolve($w[$i + 2] ?? 0);
             $last = min((int)$second, $first + 65535);
+            if ($last - $first >= self::WIDE_RANGE) {
+                // Writing this out takes time in proportion to the range, not to the file, and a /W array can
+                // hold thousands of them. Start again and keep every range as a range.
+                $font->widths = [];
+                $this->cidWidthRanges($font, $w);
+                return;
+            }
             for ($cid = $first; $cid <= $last; $cid++) {
                 $font->widths[$cid] = $width;
             }
             $i += 3;
         }
+    }
+
+    /** Reads a /W array that has wide ranges in it, leaving them unexpanded. A later entry wins over an earlier one, as when expanded. */
+    private function cidWidthRanges(Font $font, array $w): void
+    {
+        $file = $this->file;
+        $n = count($w);
+        $ranges = [];
+        $widths = [];
+        for ($i = 0; $i < $n;) {
+            $first = $file->resolve($w[$i] ?? null);
+            $second = $file->resolve($w[$i + 1] ?? null);
+            if (!is_int($first) && !is_float($first)) {
+                $i++;
+                continue;
+            }
+            $first = (int)$first;
+            if (is_array($second)) {
+                foreach ($second as $k => $width) {
+                    $ranges[] = [$first + $k, $first + $k];
+                    $widths[] = (float)$file->resolve($width);
+                }
+                $i += 2;
+                continue;
+            }
+            $ranges[] = [$first, min((int)$second, $first + 65535)];
+            $widths[] = (float)$file->resolve($w[$i + 2] ?? 0);
+            $i += 3;
+        }
+        // The index lets the earlier of two overlapping ranges win, so the list goes in last entry first.
+        $font->widthIndex = new Ranges(array_reverse($ranges));
+        $font->rangeWidths = array_reverse($widths);
     }
 
     private function parseCMap(string $data): CMap
