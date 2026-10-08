@@ -20,6 +20,8 @@ final class Font
     public const GAP_WIDTH = 0.1;
     /** Bytes of text the two caches below may hold; a character map can make one code stand for a lot of text. */
     private const CACHE_BYTES = 8 << 20;
+    /** Strings longer than this are decoded in pieces of this many bytes (an even number, so no two-byte code is split). */
+    private const PIECE = 16384;
 
     /** Single-byte codes (Type1, TrueType, Type3) or multi-byte (Type0). */
     public bool $simple = true;
@@ -54,6 +56,10 @@ final class Font
     /** True once the font is known to hold right-to-left letters. Lines set in it are put into reading order. */
     public bool $rtl = false;
     private bool $rtlKnown = false;
+    /** Decoding a string stops once its text is this long, because a character map can turn each code into many characters. */
+    public int $maxText = 64 << 20;
+    /** Called with a plain-English message when decoding cuts something short. */
+    public ?\Closure $warn = null;
 
     /** Width of the last decoded string in text units (before font size is applied). */
     public float $w = 0.0;
@@ -102,6 +108,8 @@ final class Font
             $this->n = mb_strlen($text, 'UTF-8');
             $this->w = $this->n * $this->defaultWidth * $this->scale;
             $this->sp = 0;
+        } elseif (isset($s[self::PIECE]) && $this->codespaces === []) {
+            $text = $this->decodeInPieces($s);
         } else {
             $text = $this->decodeComposite($s);
         }
@@ -139,17 +147,26 @@ final class Font
         if ($this->charset !== null) {
             return $this->decode($s);
         }
-        $codes = [];
-        if ($this->codespaces === []) {
-            $codes = ($this->codeBytes === 1 ? unpack('C*', $s) : unpack('n*', strlen($s) & 1 ? $s . "\0" : $s)) ?: [];
-        } else {
-            for ($i = 0, $len = strlen($s); $i < $len; $i += $bytes) {
-                [$bytes, $codes[]] = $this->codeAt($s, $i, $len);
-            }
-        }
         $out = '';
-        foreach ($codes as $code) {
-            $out .= $this->turned[$code] ??= self::turn($this->codeText[$code] ?? $this->lookup($code));
+        if ($this->codespaces !== []) {
+            for ($i = 0, $n = 0, $len = strlen($s); $i < $len; $i += $bytes) {
+                [$bytes, $code] = $this->codeAt($s, $i, $len);
+                $out .= $this->turned[$code] ??= self::turn($this->codeText[$code] ?? $this->lookup($code));
+                if ((++$n & 0xFFF) === 0 && isset($out[$this->maxText])) {
+                    break;
+                }
+            }
+            return $out;
+        }
+        // In pieces, like decode(), and stopping where it stops.
+        foreach (isset($s[self::PIECE]) ? str_split($s, self::PIECE) : [$s] as $piece) {
+            $codes = $this->codeBytes === 1 ? unpack('C*', $piece) : unpack('n*', strlen($piece) & 1 ? $piece . "\0" : $piece);
+            foreach ($codes ?: [] as $code) {
+                $out .= $this->turned[$code] ??= self::turn($this->codeText[$code] ?? $this->lookup($code));
+            }
+            if (isset($out[$this->maxText])) {
+                break;
+            }
         }
         return $out;
     }
@@ -182,6 +199,29 @@ final class Font
             }
         }
         return [1, ord($s[$i])];
+    }
+
+    /** A string of fixed-width codes too long to unpack in one go: that takes sixteen bytes of array for every byte of string. */
+    private function decodeInPieces(string $s): string
+    {
+        $text = '';
+        $w = 0.0;
+        $n = 0;
+        $sp = 0;
+        foreach (str_split($s, self::PIECE) as $piece) {
+            $text .= $this->decodeComposite($piece);
+            $w += $this->w;
+            $n += $this->n;
+            $sp += $this->sp;
+            if (isset($text[$this->maxText])) {
+                $this->tooLong();
+                break;
+            }
+        }
+        $this->w = $w;
+        $this->n = $n;
+        $this->sp = $sp;
+        return $text;
     }
 
     private function decodeComposite(string $s): string
@@ -232,6 +272,10 @@ final class Font
                 $w += $widths[$code] ?? ($ranged ? $this->rangeWidth($code) : $dw);
                 $n++;
                 $i += $matched;
+                if (($n & 0xFFF) === 0 && isset($text[$this->maxText])) {
+                    $this->tooLong();
+                    break;
+                }
             }
         }
 
@@ -239,6 +283,13 @@ final class Font
         $this->n = $n;
         $this->sp = $sp;
         return $text;
+    }
+
+    private function tooLong(): void
+    {
+        if ($this->warn !== null) {
+            ($this->warn)('A string shown in a font turns into more text than the memory that is left allows; the rest of it was left out');
+        }
     }
 
     private function rangeWidth(int $code): float

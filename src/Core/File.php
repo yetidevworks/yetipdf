@@ -460,25 +460,26 @@ final class File
         $xref = [];
         $containers = [];
 
-        if (preg_match_all('/(?<![0-9A-Za-z])(\d{1,10})[\0\t\n\f\r ]+(\d{1,5})[\0\t\n\f\r ]+obj(?![A-Za-z])/', $d, $m, PREG_OFFSET_CAPTURE | PREG_SET_ORDER)) {
-            foreach ($m as $hit) {
-                $xref[(int)$hit[1][0]] = [1, $hit[0][1], (int)$hit[2][0]];
-            }
+        // One match at a time: a file that is nothing but "1 0 obj " would otherwise build a match array
+        // of several hundred bytes for every eight bytes of file. Later definitions of a number replace earlier ones.
+        $marker = '/(?<![0-9A-Za-z])(\d{1,10})[\0\t\n\f\r ]+\d{1,5}[\0\t\n\f\r ]+obj(?![A-Za-z])/';
+        for ($at = 0; preg_match($marker, $d, $hit, PREG_OFFSET_CAPTURE, $at) === 1; $at = $hit[0][1] + strlen($hit[0][0])) {
+            $xref[(int)$hit[1][0]] = $hit[0][1];
         }
-        $this->xref = array_map(static fn(array $e): int => $e[1] << 1, $xref);
+        $this->xref = array_map(static fn(int $offset): int => $offset << 1, $xref);
         $this->cache = [];
         $this->objStreams = [];
 
         // Objects that live inside object streams, and trailer keys kept in cross-reference streams.
         $trailer = [];
-        foreach ($xref as $num => $entry) {
-            $head = substr($d, $entry[1], 512);
+        foreach ($xref as $num => $offset) {
+            $head = substr($d, $offset, 512);
             $isObjStm = str_contains($head, 'ObjStm');
             $isXref = str_contains($head, 'XRef');
             if (!$isObjStm && !$isXref) {
                 continue;
             }
-            $parsed = Lexer::indirect($d, $entry[1]);
+            $parsed = Lexer::indirect($d, $offset);
             $stream = $parsed[2] ?? null;
             if (!$stream instanceof Stream) {
                 continue;
@@ -502,11 +503,11 @@ final class File
         }
 
         if (!isset($trailer['Root'])) {
-            foreach ($xref as $num => $entry) {
-                if (preg_match('/\/Type\s*\/Catalog\b/', substr($d, $entry[1], 2048))) {
-                    $parsed = Lexer::indirect($d, $entry[1]);
+            foreach ($xref as $num => $offset) {
+                if (preg_match('/\/Type\s*\/Catalog\b/', substr($d, $offset, 2048))) {
+                    $parsed = Lexer::indirect($d, $offset);
                     if (is_array($parsed[2] ?? null) && ($parsed[2]['Type'] ?? null) === '/Catalog') {
-                        $trailer['Root'] = new Ref($num, $entry[2]);
+                        $trailer['Root'] = new Ref($num, $parsed[1]);
                     }
                 }
             }

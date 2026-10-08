@@ -20,8 +20,8 @@ final class CMap implements CodeMap
      */
     private const EXPAND_FLOOR = 8 << 20;
     private const EXPAND_PER_BYTE = 64;
-    /** Most bytes of UTF-16 a code may map to. Real mappings are a few characters; a ligature is three or four. */
-    private const MAX_TARGET = 1024;
+    /** Most bytes of UTF-16 a code may map to. Real mappings are a few characters; a ligature is three or four, a joined emoji up to about ten. */
+    private const MAX_TARGET = 256;
 
     /** @var array<int, string> */
     public array $map = [];

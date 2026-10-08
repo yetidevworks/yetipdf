@@ -62,6 +62,8 @@ final class FontLoader
         return $t;
     }
 
+    /** Fonts kept at once; each can hold a few tens of kilobytes, and a file can name tens of thousands of them. */
+    private const CACHE_LIMIT = 1024;
     /** A /W range at least this wide is kept as a range. Real fonts that spell out wide ranges are rare. */
     private const WIDE_RANGE = 64;
 
@@ -97,6 +99,11 @@ final class FontLoader
             $this->file->warn('Font could not be read (' . $e->getMessage() . '); using a default encoding');
             $font = new Font();
             $font->map = self::strtrMap(Encodings::table('WinAnsiEncoding'));
+        }
+        $font->maxText = intdiv($this->file->limit(), 4);
+        $font->warn = $this->file->warn(...);
+        if (count($this->cache) >= self::CACHE_LIMIT) {
+            $this->cache = [];
         }
         return $this->cache[$key] = $font;
     }

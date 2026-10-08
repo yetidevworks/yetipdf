@@ -31,8 +31,6 @@ final class Interpreter
     private const MAX_HELD = 50000;
     /** Pieces in one line past which the letter-level tidying in place() is skipped, to keep its cost in step with the line's size. */
     private const MAX_TIDIED = 2000;
-    /** Output this far behind the current line is put aside, so that taking text back out of a line never copies the whole page. */
-    private const SETTLED = 8192;
     /** How much of the text before a piece is looked at for letters the piece repeats. */
     private const OVERLAP = 256;
 
@@ -80,6 +78,8 @@ final class Interpreter
         '-' => true, '.' => true, '+' => true,
     ];
 
+    /** Text is put aside once $out is longer than this, so that taking some back never copies the whole page. */
+    private const TAIL = 8192;
     /** Content larger than this is checked against the memory that is left before it is tokenized. */
     private const GUARDED_SIZE = 1 << 20;
     /** Bytes for each token the tokenizer keeps: the string itself and its slot in the result array. */
@@ -89,9 +89,13 @@ final class Interpreter
 
     private static ?string $tokenPattern = null;
 
+    /** The end of the text so far, which is all that is ever edited: the current line, or its last two bytes when it is a long one. */
     private string $out = '';
-    /** @var list<string> output that is finished with, oldest first; $out carries on from it */
+    /** @var list<string> text that is finished with, oldest first; $out carries on from it */
     private array $done = [];
+    /** Bytes of text put aside or held back so far on this page, and the most there may be. */
+    private int $kept = 0;
+    private int $maxOut = 0;
     private int $formRuns = 0;
     private int $formBytes = 0;
     private bool $hasPrev = false;
@@ -173,8 +177,34 @@ final class Interpreter
      */
     public function page(string $content, array $resources, array $appearances = []): string
     {
+        $this->maxOut = $this->file->limit();
+        try {
+            $this->draw($content, $resources, $appearances);
+        } catch (\OverflowException) {
+            $this->file->warn('The text of a page is too large for the memory that is left; the rest of it was left out');
+        }
+        if ($this->held !== null) {
+            $this->release();
+        }
+        if ($this->done !== []) {
+            $this->out = implode('', $this->done) . $this->out;
+            $this->done = [];
+        }
+        if ($this->lines !== []) {
+            $this->place();
+        }
+        return $this->out;
+    }
+
+    /**
+     * @param array<string, mixed> $resources
+     * @param list<array{0: Stream, 1: float, 2: float}> $appearances
+     */
+    private function draw(string $content, array $resources, array $appearances): void
+    {
         $this->out = '';
         $this->done = [];
+        $this->kept = 0;
         $this->hasPrev = false;
         $this->accentAt = -1;
         $this->lineAt = 0;
@@ -215,17 +245,6 @@ final class Interpreter
             }
             $this->run($data, $this->file->dict($stream->dict['Resources'] ?? null) ?? $resources, 1, [$stream->num => true]);
         }
-        if ($this->held !== null) {
-            $this->release();
-        }
-        if ($this->done !== []) {
-            $this->out = implode('', $this->done) . $this->out;
-            $this->done = [];
-        }
-        if ($this->lines !== []) {
-            $this->place();
-        }
-        return $this->out;
     }
 
     /**
@@ -417,6 +436,9 @@ final class Interpreter
                         $name = substr($stack[$n - 2], 1);
                         $this->size = self::last($stack[$n - 1]);
                         if (!array_key_exists($name, $fontCache)) {
+                            if (count($fontCache) >= 256) {
+                                $fontCache = [];
+                            }
                             $fontDict ??= $this->file->dict($resources['Font'] ?? null) ?? [];
                             $fontCache[$name] = isset($fontDict[$name]) ? $this->fonts->load($fontDict[$name]) : null;
                         }
@@ -574,13 +596,12 @@ final class Interpreter
                 }
             }
 
+            if (isset($this->out[self::TAIL])) {
+                $this->settle();
+            }
             $before = strlen($this->out);
 
             if ($glue === "\n") {
-                if ($this->lineAt > self::SETTLED) {
-                    $this->settle();
-                    $before = strlen($this->out);
-                }
                 $out = $this->out;
                 $len = strlen($out);
                 // "exam-" at a line end followed by "ple": put the word back together.
@@ -662,14 +683,15 @@ final class Interpreter
             $this->held = [];
             $this->heldAt = [$y * $ux - $x * $uy, $ux, $uy, $size];
             if ($same) {
-                // The line began with ordinary text. Take it back so it can be placed with the rest.
-                $head = substr($this->out, $this->lineAt);
-                $this->out = substr($this->out, 0, $this->lineAt);
+                // The line began with ordinary text. Take it back so it can be placed with the rest, unless
+                // it has run on so long that its start has been put aside; then what follows just goes after it.
+                $head = $this->lineAt >= 0 ? substr($this->out, $this->lineAt) : '';
                 if ($head !== '') {
+                    $this->out = substr($this->out, 0, $this->lineAt);
                     $this->held[] = [$this->lx * $this->pux + $this->ly * $this->puy, $this->px * $this->pux + $this->py * $this->puy, $head, $this->psize];
                 }
             } else {
-                if ($this->lineAt > self::SETTLED) {
+                if (isset($this->out[self::TAIL])) {
                     $this->settle();
                 }
                 if ($this->hasPrev) {
@@ -683,6 +705,10 @@ final class Interpreter
         }
 
         $this->heldCount++;
+        $this->kept += strlen($text);
+        if ($this->kept > $this->maxOut) {
+            throw new \OverflowException('Page text is larger than the memory that is left allows');
+        }
         $start = $x * $ux + $y * $uy;
         $width = $advance * $hLen;
         $letters = $font->n ?: 1;
@@ -752,13 +778,28 @@ final class Interpreter
         $this->pieces[] = $held;
     }
 
-    /** Puts the output before the current line aside. Only the line itself can still change. */
+    /**
+     * Puts aside the text that will not change again: everything before the current line, or when the line
+     * itself is long, all but its last two bytes. An accent that lands on a letter and a hyphen at a line end both
+     * cut the end off the text, and a line that turns out to read right to left is taken back whole. Copying the
+     * page for each of those would make a long page cost the square of its length.
+     */
     private function settle(): void
     {
-        $at = min($this->lineAt, strlen($this->out));
+        $len = strlen($this->out);
+        $at = $this->lineAt < $len ? $this->lineAt : $len;
+        if ($at < 0 || $len - $at > self::TAIL >> 1) {
+            $at = $len - 2;
+            $this->lineAt = -1;
+        } else {
+            $this->lineAt = 0;
+        }
         $this->done[] = substr($this->out, 0, $at);
         $this->out = substr($this->out, $at);
-        $this->lineAt = 0;
+        $this->kept += $at;
+        if ($this->kept > $this->maxOut) {
+            throw new \OverflowException('Page text is larger than the memory that is left allows');
+        }
     }
 
     /** Puts the text of the held lines where release() marked them. */

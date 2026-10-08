@@ -390,4 +390,172 @@ final class HardeningTest extends TestCase
 
         $this->assertCount(1, $file->warnings);
     }
+
+    public function testLzwWithoutClearCodesPastTheLastTableEntryStillDecodes(): void
+    {
+        $literals = str_repeat('abcdefgh', 700);
+        $this->assertSame($literals, Filters::lzw(self::lzwLiterals($literals)));
+    }
+
+    public function testAnAccentAndAHyphenLongAfterTheStartOfALongPageStillWork(): void
+    {
+        // Far more text than the part of the page that is kept open for edits, so most of it has been moved aside by then.
+        $lines = '';
+        $expected = [];
+        for ($i = 0; $i < 3000; $i++) {
+            $y = 780 - $i * 24;
+            $lines .= "1 0 0 1 72 $y Tm (ab-) Tj 1 0 0 1 72 " . ($y - 12) . " Tm (cd) Tj ";
+            $expected[] = 'abcd';
+        }
+        $this->assertSame(implode("\n", $expected), YetiPdf::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
+
+        // A letter drawn over an accent takes the accent back out of the text, and runs on from the line before.
+        $lines = '';
+        for ($i = 0; $i < 6000; $i++) {
+            $y = 780 - $i * 12;
+            $lines .= "1 0 0 1 72 $y Tm (\264) Tj 1 0 0 1 72 $y Tm (e) Tj ";
+        }
+        $this->assertSame(str_repeat('é', 6000), YetiPdf::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
+    }
+
+    /** A font that turns the code <0041> into a hundred letters. */
+    private static function wordyPage(int $strings, int $codes): string
+    {
+        $cmap = "begincodespacerange <0000> <FFFF> endcodespacerange\nbeginbfchar <0041> <" . str_repeat('0041', 100) . "> endbfchar";
+        $content = 'BT /F1 12 Tf 72 720 Td ';
+        for ($i = 0; $i < $strings; $i++) {
+            $content .= '<' . str_repeat('0041', $codes) . '> Tj 0 -14 Td ';
+        }
+        return PdfBuilder::build(
+            [$content . 'ET'],
+            ['F1' => '/Subtype /Type0 /BaseFont /X /Encoding /Identity-H /ToUnicode 100 0 R /DescendantFonts [101 0 R]'],
+            [100 => PdfBuilder::stream($cmap, true), 101 => '<< /Type /Font /Subtype /CIDFontType2 /DW 1000 >>']
+        );
+    }
+
+    public function testAStringThatTurnsIntoTooMuchTextIsCutShortWithAWarning(): void
+    {
+        $doc = new Document(new File(self::wordyPage(1, 20000), '', 4 << 20), new Options());
+        $text = $doc->text();
+
+        $this->assertNotSame('', $text);
+        $this->assertLessThan(2000000, strlen($text));
+        $this->assertCount(1, self::notes($doc, 'turns into more text'));
+    }
+
+    public function testAPageWhoseTextOutgrowsTheMemoryKeepsWhatCameFirst(): void
+    {
+        $doc = new Document(new File(self::wordyPage(8, 20000), '', 4 << 20), new Options());
+        $text = $doc->text();
+
+        $this->assertStringStartsWith('AAAA', $text);
+        $this->assertLessThan(8 * 2000000, strlen($text));
+        $this->assertCount(1, self::notes($doc, 'text of a page is too large'));
+    }
+
+    public function testAStringOfFixedWidthCodesLongerThanOnePieceDecodesLikeAShortOne(): void
+    {
+        $font = self::compositeFont('0 [500]');
+        $font->codesAreUnicode = true;
+        $long = str_repeat(pack('n', 0x41), 40001);
+
+        $this->assertSame(str_repeat('A', 40001), $font->decode($long));
+        $this->assertSame(40001, $font->n);
+        $this->assertEqualsWithDelta(40001 * 1.0, $font->w, 1e-6);
+        // An odd number of bytes ends in a half code, as it always has.
+        $this->assertSame(str_repeat('A', 20000) . "\0", $font->decode(str_repeat(pack('n', 0x41), 20000) . "\x00"));
+    }
+
+    public function testACrossReferenceStreamThatUnpacksToFarMoreThanTheFileIsCutShort(): void
+    {
+        $rows = (string)gzcompress(str_repeat("\x01\x00\x10\x00", 500000), 9);
+        $pdf = "%PDF-1.5\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n";
+        $at = strlen($pdf);
+        $pdf .= "3 0 obj\n<< /Type /XRef /Size 500000 /W [1 2 1] /Root 1 0 R /Filter /FlateDecode /Length " . strlen($rows) . " >>\nstream\n$rows\nendstream\nendobj\nstartxref\n$at\n%%EOF\n";
+        $file = new File($pdf);
+
+        $this->assertNotEmpty(array_filter($file->warnings, static fn(string $w): bool => str_contains($w, 'too large to unpack')));
+        $this->assertLessThan(100000, count($file->objectNumbers()));
+    }
+
+    public function testManyCrossReferenceSubsectionsThatClaimMoreRowsThanTheyHaveAreGivenUpOn(): void
+    {
+        $pdf = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n";
+        $at = strlen($pdf);
+        $pdf .= "xref\n" . str_repeat("0 1000000\n0000000000 65535 f \n", 4000) . "trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n$at\n%%EOF\n";
+        $doc = YetiPdf::parse($pdf);
+
+        $this->assertSame('', $doc->text());
+        $this->assertContains('Cross-reference table was missing or damaged; rebuilt by scanning the file', $doc->warnings());
+    }
+
+    public function testAnObjectStreamHeaderIsReadOnlyAsFarAsTheMemoryAllows(): void
+    {
+        $pairs = '';
+        $objects = '';
+        for ($i = 0; $i < 1000; $i++) {
+            $pairs .= (5 + $i) . ' ' . strlen($objects) . ' ';
+            $objects .= "<< /K $i >> ";
+        }
+        $pdf = "%PDF-1.5\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+            . '3 0 obj' . "\n<< /Type /ObjStm /N 1000 /First " . strlen($pairs) . ' /Length ' . strlen($pairs . $objects) . " >>\nstream\n$pairs$objects\nendstream\nendobj\n"
+            . "trailer << /Root 1 0 R >>\n";
+
+        $roomy = new File($pdf);
+        $this->assertSame(['K' => 999], $roomy->get(1004));
+
+        // A megabyte allows 512 entries.
+        $tight = new File($pdf, '', 1 << 20);
+        $this->assertSame(['K' => 511], $tight->get(516));
+        $this->assertNull($tight->get(517));
+    }
+
+    public function testStreamsWithNoEndstreamAreStillCutAtTheirObjectEnd(): void
+    {
+        $page = static fn(int $page, int $stream): string => "$page 0 obj\n<< /Type /Page /Parent 2 0 R /Contents $stream 0 R /Resources << /Font << /F1 9 0 R >> >> >>\nendobj\n";
+        $pdf = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+            . "2 0 obj\n<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>\nendobj\n"
+            . "9 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n"
+            . $page(3, 4) . "4 0 obj\n<< /Length 999 >>\nstream\nBT /F1 12 Tf (one) Tj ET\nendstream\nendobj\n"
+            . $page(5, 6) . "6 0 obj\n<< /Length 999 >>\nstream\nBT /F1 12 Tf (two) Tj ET\nendobj\n"
+            . $page(7, 8) . "8 0 obj\n<< /Length 999 >>\nstream\nBT /F1 12 Tf (three) Tj ET\nendobj\n"
+            . "trailer << /Root 1 0 R >>\n";
+
+        $this->assertSame("one\n\ntwo\n\nthree", YetiPdf::parse($pdf)->text());
+    }
+
+    public function testAType1EncodingIsReadFromTheStartOfAProgramThatIsTooBigToUnpack(): void
+    {
+        $head = "%!PS-AdobeFont-1.0: Custom\n/Encoding 256 array\n0 1 255 {1 index exch /.notdef put} for\ndup 65 /Eacute put\nreadonly def\n";
+        $program = PdfBuilder::stream($head . str_repeat(' ', 3000000), true, '/Length1 ' . strlen($head));
+        $pdf = PdfBuilder::build([], ['F1' => '/Subtype /Type1 /BaseFont /Custom /FontDescriptor 100 0 R'],
+            [100 => '<< /Type /FontDescriptor /FontFile 101 0 R >>', 101 => $program]);
+        $file = new File($pdf, '', 4 << 20);
+
+        $font = (new FontLoader($file))->load(new Ref(10));
+        $this->assertSame('É', $font->decode('A'));
+        $this->assertSame([], $file->warnings);
+    }
+
+    public function testRepeatedNotesAreKeptOnceAndTheListStopsGrowing(): void
+    {
+        $file = new File(PdfBuilder::build(['x']));
+        for ($i = 0; $i < 5000; $i++) {
+            $file->warn('same note');
+            $file->warn("note $i");
+        }
+
+        $this->assertLessThanOrEqual(102, count($file->warnings));
+        $this->assertSame(1, count(array_keys($file->warnings, 'same note', true)));
+        $this->assertSame('More problems were found than are listed here', end($file->warnings));
+    }
+
+    public function testAFileOfNothingButObjectMarkersIsRebuiltWithoutBuildingAMatchForEach(): void
+    {
+        $pdf = "%PDF-1.4\n" . str_repeat('1 0 obj ', 200000) . "\n2 0 obj\n<< /Type /Catalog /Pages 3 0 R >>\nendobj\n3 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\ntrailer << /Root 2 0 R >>\n";
+        $doc = YetiPdf::parse($pdf);
+
+        $this->assertSame('', $doc->text());
+        $this->assertContains('Cross-reference table was missing or damaged; rebuilt by scanning the file', $doc->warnings());
+    }
 }
