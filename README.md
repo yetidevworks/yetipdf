@@ -12,27 +12,29 @@ Here are six real documents, one at a time, on PHP 8.4 with no JIT. **pdftotext*
 
 | Document | Pages | YetiPDF | pdftotext | PrinsFrank | smalot |
 |---|---|---|---|---|---|
-| PostgreSQL 16 manual | 3,057 | **1.63s** | 2.22s | 8.13s | 41.06s |
-| NIST SP 800-53 | 492 | **0.62s** | 0.83s | 2.91s | 51.57s |
-| IRS Publication 17 | 142 | **0.35s** | 0.41s | 1.82s | 5.64s |
-| The Memoir Class manual | 625 | **0.41s** | 1.01s | failed | 6.24s |
-| RFC 9110 | 194 | **0.16s** | 0.26s | 0.68s | 15.91s |
-| Pro Git | 501 | **0.10s** | 0.29s | 0.88s | 0.68s |
+| PostgreSQL 16 manual | 3,057 | **1.73s** | 2.22s | 8.13s | 41.06s |
+| NIST SP 800-53 | 492 | **0.63s** | 0.83s | 2.91s | 51.57s |
+| IRS Publication 17 | 142 | **0.36s** | 0.41s | 1.82s | 5.64s |
+| The Memoir Class manual | 625 | **0.44s** | 1.01s | failed | 6.24s |
+| RFC 9110 | 194 | **0.17s** | 0.26s | 0.68s | 15.91s |
+| Pro Git | 501 | **0.11s** | 0.29s | 0.88s | 0.68s |
 
 Yes, that's PHP beating a C++ binary. The PostgreSQL manual is just over a million words, and YetiPDF reads all of it in under two seconds.
 
 It isn't magic. PHP's `zlib` and regex engines are C underneath, and YetiPDF hands them nearly all of the heavy lifting. It also skips work that a text extractor has no use for. Every line, fill and colour change on a page gets stepped over before PHP ever sees it, and images are never decompressed at all.
 
+If you can turn on PHP's JIT, do. The PostgreSQL manual drops to 1.28s with it.
+
 Memory matters just as much if you're running on a 256MB host:
 
 | Document | YetiPDF | pdftotext | PrinsFrank | smalot |
 |---|---|---|---|---|
-| PostgreSQL 16 manual | 67MB | 72MB | 48MB | 430MB |
-| NIST SP 800-53 | 52MB | 71MB | 71MB | 193MB |
-| IRS Publication 17 | 46MB | 29MB | 82MB | 193MB |
-| Pro Git | 32MB | 17MB | 27MB | 779MB |
+| PostgreSQL 16 manual | 53MB | 72MB | 48MB | 430MB |
+| NIST SP 800-53 | 18MB | 71MB | 71MB | 193MB |
+| IRS Publication 17 | 20MB | 29MB | 82MB | 193MB |
+| Pro Git | 26MB | 17MB | 27MB | 779MB |
 
-Those figures are for pulling the whole document into one string. Read it a page at a time, as in the example below, and the PostgreSQL manual peaks at 55MB.
+Those figures are for pulling the whole document into one string. Read it a page at a time, as in the example below, and the PostgreSQL manual peaks at 39MB.
 
 ## How accurate?
 
@@ -44,9 +46,9 @@ I tested against 218 PDFs. Twenty are ordinary documents: research papers, tax f
 |---|---|---|---|
 | Documents read | **218 of 218** | 191 | 211 |
 | Words recovered | **99.8%** | 88.7% | 93.9% |
-| Documents scoring 95% or better | **190** | 113 | 120 |
+| Documents scoring 95% or better | **196** | 113 | 120 |
 | Ordinary documents scoring 95% or better | **19 of 20** | 14 | 13 |
-| Time for all 218 | **5.4s** | 22.5s | 147.2s |
+| Time for all 218 | **5.6s** | 22.5s | 147.2s |
 
 Two things about that table. `pdftotext` is a reference and not the truth, so when YetiPDF and `pdftotext` disagree and YetiPDF is the one that's right, it still loses points. The one ordinary document under 95% is a NIST standard where `pdftotext` turns the small-caps heading into "dvanced ncryption tandard". And most of the files that score badly are ones nothing can read, because the PDF never says which character each glyph stands for.
 
@@ -94,7 +96,7 @@ $doc = YetiPdf::open('report.pdf', new Options(
     password: 'secret',        // for PDFs that need one to open
     dehyphenate: true,         // "exam-" + "ple" across a line break becomes "example"
     expandLigatures: true,     // "ﬁ" becomes "fi"
-    annotations: true,         // include typed-on notes and form field values
+    annotations: true,         // include typed-on notes, form field values and stamps
     wordGap: 0.11,             // how big a gap counts as a space, as a fraction of the font size
 ));
 ```
@@ -121,6 +123,16 @@ After that, nothing throws. A page that can't be read comes back empty and leave
 
 PDFs that are "protected" against copying or printing but open without a password read normally. That covers the old RC4 scheme as well as AES-128 and AES-256, though the AES ones need the `openssl` extension.
 
+## And it doesn't fall over
+
+Some PDFs are built to hurt whatever opens them. A few kilobytes can unpack into gigabytes, or ask for the same drawing a billion times over. PHP can't catch running out of memory, so one bad upload takes the whole worker down with it.
+
+**YetiPDF** puts a ceiling on everything it unpacks or builds, and the ceiling moves with however much memory PHP has left. Whatever goes over is cut off or skipped. You still get the rest of the document, and `warnings()` says what was left out.
+
+Ordinary PDFs don't come near those ceilings. I ran all 1,009 in the test corpus under a 64MB `memory_limit` and got the same text, word for word, as with 2GB to play with.
+
+One caveat. The ceilings are about memory. A file that sets out to waste your time can still be slow, so give the job a time limit if strangers can upload to it.
+
 ## Words come out as words
 
 A PDF doesn't store sentences. It stores instructions like "draw these three letters here, now move a bit, now draw two more". Often there are no spaces at all, and the gaps between words are just gaps.
@@ -131,15 +143,17 @@ So **YetiPDF** works out where each piece of text lands on the page and rebuilds
 - Ligatures become ordinary letters, so "ﬁnd" is searchable as "find".
 - Accents that TeX draws separately from their letter are combined, so you get "Brébeuf" and not "Br´ebeuf".
 - Fake bold, where the same text is drawn twice, shows up once.
-- Text typed onto a page as a note, and the values filled into form fields, are included.
+- Hebrew and Arabic come out in reading order. A PDF draws them left to right like everything else, so the letters arrive backwards. **YetiPDF** turns each line around and leaves the numbers and English words in it alone.
+- When a font can't say which character one of its glyphs is, the gap it took up is kept, so the words either side don't fuse into one.
+- Text typed onto a page as a note, the values filled into form fields, and the wording on stamps are included.
 
 ## What it doesn't do yet
 
 I'd rather you knew now.
 
 - **Scanned pages.** There's no OCR. A scan that already has a hidden text layer works fine, because that layer is ordinary text.
-- **Some CJK fonts.** A few PDFs use fonts that never say which character each glyph is, and rely on tables that live outside the file. Text in those fonts is left out, and `warnings()` names the font. Most Japanese, Chinese and Korean PDFs read correctly, including the four in my set of ordinary documents, but one of the pdf.js test files hits this.
-- **Arabic and Hebrew ordering.** Right-to-left text comes out in the order it's drawn on the page, which is backwards for reading.
+- **A few old CJK encodings.** Some fonts never say which character each glyph is, and rely on tables that live outside the file. Adobe's tables for Japanese, Chinese and Korean now ship with the library, and when those don't apply it reads the table inside the embedded font. What's left is a handful of pre-Unicode encodings I haven't added. Text in those is left out, and `warnings()` names the font.
+- **Hebrew and Arabic fine print.** The reading order is worked out from where the letters sit on the page, with a short version of the Unicode rules. Ordinary lines with numbers and English in them come out right. A phone number in brackets might not, and in some PDFs a vowel mark lands on the letter next door.
 - **Columns.** Text comes out in the order the PDF draws it. That's nearly always what you'd expect, and for search it rarely matters.
 - **Huge files.** The whole file is read into memory, so a 1GB PDF needs 1GB.
 
@@ -156,7 +170,7 @@ php benchmarks/diff.php some.pdf                   # which words differ from pdf
 
 You'll need `pdftotext` installed, since it's the reference. If you find a PDF that **YetiPDF** reads badly, `diff.php` shows exactly which words went missing, and I'd love to see it in an issue.
 
-The numbers above came from an Apple Silicon Mac. The single-document timings are each tool run alone, best of three (smalot got one run, for obvious reasons). The 218-file totals add up the per-file extraction times, with six files running at once. YetiPDF's figures were refreshed on PHP 8.4.25 after the font optimization; the other tools' figures are from the original benchmark run.
+The numbers above came from an Apple Silicon Mac. The single-document timings are each tool run alone, best of three (smalot got one run, for obvious reasons). The 218-file totals add up the per-file extraction times, with six files running at once. YetiPDF's figures were last refreshed on PHP 8.4.25, after the memory and right-to-left work; the other tools' figures are from the original benchmark run.
 
 ## Tests
 
@@ -166,7 +180,7 @@ composer test
 
 ## License
 
-MIT. The bundled glyph list in `data/glyphlist.php` is Adobe's, under the BSD 3-Clause license reproduced in that file.
+MIT. The bundled glyph list in `data/glyphlist.php` and the CJK character tables in `data/cid/` are Adobe's, under the BSD 3-Clause license reproduced in `data/glyphlist.php` and `data/cid/LICENSE`. The Hebrew and Arabic letter forms in `data/presentationforms.php` come from the Unicode Character Database, under the Unicode License.
 
 Enjoy!
 
