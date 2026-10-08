@@ -10,7 +10,7 @@ namespace YetiPdf\Font;
  * The parser takes whatever it can read and ignores the rest. A malformed range or a missing
  * codespace section costs the mappings in that section, never the whole font.
  */
-final class CMap
+final class CMap implements CodeMap
 {
     private const LAZY_RANGE = 512;
 

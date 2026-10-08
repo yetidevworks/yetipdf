@@ -27,7 +27,7 @@ final class Font
 
     /** Composite fonts only. */
     public int $codeBytes = 2;
-    public ?CMap $toUnicode = null;
+    public ?CodeMap $toUnicode = null;
     /** Codes are UTF-16BE already (the UniXXX-UCS2/UTF16 predefined CMaps). */
     public bool $codesAreUnicode = false;
     /** A legacy multi-byte charset name for mb_convert_encoding, when the encoding is one of the old CJK CMaps. */

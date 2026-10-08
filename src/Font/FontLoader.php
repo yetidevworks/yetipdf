@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace YetiPdf\Font;
 
 use YetiPdf\Core\File;
+use YetiPdf\Core\PdfString;
 use YetiPdf\Core\Ref;
 use YetiPdf\Core\Stream;
 
@@ -85,7 +86,7 @@ final class FontLoader
             $dict = $this->file->dict($ref) ?? [];
             $font = ($dict['Subtype'] ?? null) === '/Type0' ? $this->composite($dict) : $this->simple($dict);
             if ($font->unmapped) {
-                $name = ltrim((string)($this->file->resolve($dict['BaseFont'] ?? null) ?? 'unnamed'), '/');
+                $name = $this->name($dict['BaseFont'] ?? null) ?: 'unnamed';
                 $this->file->warnings[] = "Font $name has no character map; text set in it may be missing or wrong";
             }
         } catch (\Throwable $e) {
@@ -96,13 +97,23 @@ final class FontLoader
         return $this->cache[$key] = $font;
     }
 
+    /** A name such as /Helvetica without its slash. Some writers store these as strings. */
+    private function name(mixed $v): string
+    {
+        $v = $this->file->resolve($v);
+        if ($v instanceof PdfString) {
+            return $v->value;
+        }
+        return is_string($v) ? ltrim($v, '/') : '';
+    }
+
     /** @param array<string, mixed> $dict */
     private function simple(array $dict): Font
     {
         $file = $this->file;
         $font = new Font();
         $subtype = $dict['Subtype'] ?? null;
-        $baseFont = ltrim((string)($file->resolve($dict['BaseFont'] ?? null) ?? ''), '/');
+        $baseFont = $this->name($dict['BaseFont'] ?? null);
         $baseFont = preg_replace('/^[A-Z]{6}\+/', '', $baseFont) ?? $baseFont;
         $descriptor = $file->dict($dict['FontDescriptor'] ?? null) ?? [];
         $symbolic = ((int)($file->resolve($descriptor['Flags'] ?? 0)) & 4) !== 0;
@@ -258,9 +269,21 @@ final class FontLoader
         } elseif (in_array($this->file->resolve($dict["ToUnicode"] ?? null), ["/Identity-H", "/Identity-V"], true)) {
             $font->codesAreUnicode = true;
         } elseif (!$font->codesAreUnicode && $font->charset === null) {
-            $font->unmapped = true;
+            $font->toUnicode = $this->fallbackMap($dict, $descendant);
+            $font->unmapped = $font->toUnicode === null;
         }
         return $font;
+    }
+
+    /**
+     * Last resorts for a composite font that carries no character map of its own.
+     *
+     * @param array<string, mixed> $dict
+     * @param array<string, mixed> $descendant
+     */
+    private function fallbackMap(array $dict, array $descendant): ?CodeMap
+    {
+        return null;
     }
 
     private function applyCodeLengths(Font $font, CMap $cmap): void
