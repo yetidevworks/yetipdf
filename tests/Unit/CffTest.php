@@ -7,6 +7,8 @@ namespace YetiPdf\Tests\Unit;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use YetiPdf\Font\Cff;
+use YetiPdf\Tests\PdfBuilder;
+use YetiPdf\YetiPdf;
 
 final class CffTest extends TestCase
 {
@@ -270,6 +272,22 @@ final class CffTest extends TestCase
                 $this->assertTrue($result === null || is_array($result));
             }
         }
+    }
+
+    public function testLigatureCodesDecodeThroughTheFontsOwnEncoding(): void
+    {
+        // A TeX font: /Differences names a few codes and leaves out the base encoding, so codes 12 and 14
+        // are whatever the CFF program says they are. StandardEncoding has nothing there.
+        $cff = self::font(self::codes(11, 12, 14, 15, 99), self::sids(391, 109, 392, 393, 394), ['ff', 'ffi', 'ffl', 'g99']);
+        $pdf = PdfBuilder::build(['BT /F1 12 Tf 72 720 Td (E\016cient sub\014eld o\016ce o\013set \000\011 ca\143) Tj ET'], [
+            'F1' => '/Subtype /Type1 /BaseFont /ABCDEF+CMR12 /FontDescriptor 100 0 R /Encoding << /Differences [0 /Gamma 9 /Psi] >>',
+        ], [
+            100 => '<< /Type /FontDescriptor /FontName /ABCDEF+CMR12 /Flags 4 /FontFile3 101 0 R >>',
+            101 => PdfBuilder::stream($cff, true, '/Subtype /Type1C'),
+        ]);
+
+        // Ligatures are expanded to letters on the way out, so these come back as ordinary words.
+        $this->assertSame("Efficient subfield office offset \u{0393}\u{03A8} cac", YetiPdf::parse($pdf)->text());
     }
 
     /**

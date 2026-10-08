@@ -150,7 +150,7 @@ final class FontLoader
             } elseif ($subtype === '/TrueType') {
                 $baseName = 'WinAnsiEncoding';
             } else {
-                $table = $this->type1BuiltinEncoding($descriptor);
+                $table = $this->builtinEncoding($descriptor);
                 $baseName = ($symbolic && $table === null && $differences === []) ? 'WinAnsiEncoding' : 'StandardEncoding';
             }
         }
@@ -452,6 +452,43 @@ final class FontLoader
             if ($code < 256) {
                 $table[$code] = GlyphList::toUnicode($row[2]);
             }
+        }
+        return $table;
+    }
+
+    /**
+     * The encoding built into an embedded font program, for fonts whose dictionary names no base encoding.
+     *
+     * @param array<string, mixed> $descriptor
+     * @return array<int, string>|null
+     */
+    private function builtinEncoding(array $descriptor): ?array
+    {
+        return $this->type1BuiltinEncoding($descriptor) ?? $this->cffBuiltinEncoding($descriptor);
+    }
+
+    /**
+     * The built-in encoding of an embedded CFF font program (/FontFile3, Type1C or OpenType).
+     *
+     * @param array<string, mixed> $descriptor
+     * @return array<int, string>|null
+     */
+    private function cffBuiltinEncoding(array $descriptor): ?array
+    {
+        $stream = $this->file->resolve($descriptor['FontFile3'] ?? null);
+        if (!$stream instanceof Stream || !in_array($this->file->resolve($stream->dict['Subtype'] ?? null), ['/Type1C', '/OpenType'], true)) {
+            return null;
+        }
+        $data = $this->file->streamData($stream);
+        $names = $data === null ? null : Cff::encoding($data);
+        if ($names === null) {
+            return null;
+        }
+        // Codes the font does not list, and glyph names we cannot read ("g12", "C85"), keep StandardEncoding's
+        // character, the same rule the Differences array follows: a wrong letter can be searched around, a missing one cannot.
+        $table = Encodings::table('StandardEncoding');
+        foreach ($names as $code => $name) {
+            $table[$code] = GlyphList::lookup($name) ?? $table[$code];
         }
         return $table;
     }
