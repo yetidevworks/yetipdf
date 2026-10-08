@@ -302,26 +302,60 @@ final class FontLoader
      */
     private function fallbackMap(array $dict, array $descendant): ?CodeMap
     {
-        return $this->collectionMap($dict, $descendant);
-    }
-
-    /**
-     * Identity-H/V makes each code a CID, and a CID of one of Adobe's CJK collections has a published character.
-     *
-     * @param array<string, mixed> $dict
-     * @param array<string, mixed> $descendant
-     */
-    private function collectionMap(array $dict, array $descendant): ?CodeMap
-    {
+        // Only Identity-H and Identity-V make the code the CID, and no other code-to-CID CMap is implemented.
         if (!in_array($this->file->resolve($dict['Encoding'] ?? null), ['/Identity-H', '/Identity-V'], true)) {
             return null;
         }
+        return $this->collectionMap($descendant) ?? $this->embeddedFontMap($descendant);
+    }
+
+    /**
+     * A CID of one of Adobe's CJK collections has a published character.
+     *
+     * @param array<string, mixed> $descendant
+     */
+    private function collectionMap(array $descendant): ?CodeMap
+    {
         $info = $this->file->dict($descendant['CIDSystemInfo'] ?? null) ?? [];
         if ($this->name($info['Registry'] ?? null) !== 'Adobe') {
             return null;
         }
         $ordering = trim($this->name($info['Ordering'] ?? null), " \t\r\n\0");
         return CidCollection::supports($ordering) ? new CidCollection($ordering) : null;
+    }
+
+    /**
+     * The character map inside an embedded TrueType or OpenType program, read backwards from glyph to code point.
+     *
+     * @param array<string, mixed> $descendant
+     */
+    private function embeddedFontMap(array $descendant): ?CodeMap
+    {
+        $file = $this->file;
+        $descriptor = $file->dict($descendant['FontDescriptor'] ?? null) ?? [];
+        $program = $file->resolve($descriptor['FontFile2'] ?? null);
+        if (!$program instanceof Stream) {
+            $program = $file->resolve($descriptor['FontFile3'] ?? null);
+            if (!$program instanceof Stream || $file->resolve($program->dict['Subtype'] ?? null) !== '/OpenType') {
+                return null;
+            }
+        }
+        $data = $file->streamData($program);
+        // An OpenType program with CFF outlines ("OTTO") maps CIDs to glyphs through the CFF charset, not by glyph id.
+        if ($data === null || $data === '' || str_starts_with($data, 'OTTO')) {
+            return null;
+        }
+
+        $cidToGid = null;
+        $gidMap = $file->resolve($descendant['CIDToGIDMap'] ?? null);
+        if ($gidMap instanceof Stream) {
+            $cidToGid = $file->streamData($gidMap);
+            if ($cidToGid === null || $cidToGid === '') {
+                return null;
+            }
+        }
+        $map = new TrueTypeMap($data, $cidToGid);
+        return $map->isUsable() ? $map : null;
     }
 
     private function applyCodeLengths(Font $font, CMap $cmap): void
