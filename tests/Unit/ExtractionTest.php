@@ -201,4 +201,18 @@ final class ExtractionTest extends TestCase
         $pdf = PdfBuilder::build(["BT /F1 10 Tf 72 720 Td (No\001gap) Tj ET"], ['F1' => $font]);
         $this->assertSame('Nogap', YetiPdf::parse($pdf)->text());
     }
+
+    public function testStampTextIsReadAndLinksAreNot(): void
+    {
+        $form = '/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /F1 10 0 R >> >>';
+        $pdf = PdfBuilder::build(['BT /F1 12 Tf 72 720 Td (Body) Tj ET'], [], [
+            100 => '<< /Type /Annot /Subtype /Stamp /Rect [72 600 172 620] /AP << /N 101 0 R >> >>',
+            101 => PdfBuilder::stream('BT /F1 10 Tf 2 5 Td (APPROVED) Tj ET', false, $form),
+            102 => '<< /Type /Annot /Subtype /Link /Rect [72 500 172 520] /AP << /N 103 0 R >> >>',
+            103 => PdfBuilder::stream('BT /F1 10 Tf 2 5 Td (hidden) Tj ET', false, $form),
+        ]);
+        $pdf = str_replace('/Contents 31 0 R', '/Contents 31 0 R /Annots [100 0 R 102 0 R]', $pdf);
+
+        $this->assertSame("Body\nAPPROVED", YetiPdf::parse($pdf)->text());
+    }
 }

@@ -159,7 +159,8 @@ final class Document
     }
 
     /**
-     * Appearance streams of the annotations that carry text of their own: typed-on-the-page notes and form fields.
+     * Appearance streams of the visible annotations, which is where their text is: notes typed onto the page,
+     * form field values, stamps, and the labels on media players. Links and pop-up windows draw none.
      *
      * @param array<string, mixed> $page
      * @return list<array{0: Stream, 1: float, 2: float}>
@@ -175,7 +176,7 @@ final class Document
         foreach ($annots as $ref) {
             $annot = $file->dict($ref);
             $subtype = $annot['Subtype'] ?? null;
-            if ($annot === null || ($subtype !== '/FreeText' && $subtype !== '/Widget')) {
+            if ($annot === null || $subtype === '/Link' || $subtype === '/Popup') {
                 continue;
             }
             // Bit 2 is Hidden, bit 6 is NoView.

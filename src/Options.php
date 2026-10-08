@@ -13,7 +13,7 @@ final class Options
         public readonly bool $dehyphenate = true,
         /** Replace ligature characters (ﬁ, ﬂ, ﬀ ...) with the letters they stand for. */
         public readonly bool $expandLigatures = true,
-        /** Include text typed onto the page as an annotation, and the visible values of form fields. */
+        /** Include the text annotations show on the page: typed-on notes, stamps, and the visible values of form fields. */
         public readonly bool $annotations = true,
         /** Gap, as a fraction of the font size, that separates two words. */
         public readonly float $wordGap = 0.11,
