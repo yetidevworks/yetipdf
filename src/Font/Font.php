@@ -42,6 +42,9 @@ final class Font
     public bool $unmapped = false;
     /** True once any code has been mapped to GAP. */
     public bool $gaps = false;
+    /** True once the font is known to hold right-to-left letters. Lines set in it are put into reading order. */
+    public bool $rtl = false;
+    private bool $rtlKnown = false;
 
     /** Width of the last decoded string in text units (before font size is applied). */
     public float $w = 0.0;
@@ -75,6 +78,10 @@ final class Font
             $this->n = strlen($s);
             $this->sp = $sp;
             $text = strtr($s, $this->map);
+            if (!$this->rtlKnown) {
+                $this->rtlKnown = true;
+                $this->rtl = (bool)preg_match(Utf::RIGHT_TO_LEFT, implode('', $this->map));
+            }
         } elseif ($this->charset !== null) {
             $text = (string)@mb_convert_encoding($s, 'UTF-8', $this->charset);
             $this->n = mb_strlen($text, 'UTF-8');
@@ -166,6 +173,10 @@ final class Font
             } else {
                 $text = '';
             }
+        }
+        // Every right-to-left letter starts with a byte from 0xD6 up in UTF-8, which rules out most text at a glance.
+        if (!$this->rtl && $text >= "\xD6" && preg_match(Utf::RIGHT_TO_LEFT, $text)) {
+            $this->rtl = true;
         }
         return $this->codeText[$code] = $text;
     }

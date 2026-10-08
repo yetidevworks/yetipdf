@@ -7,6 +7,9 @@ namespace YetiPdf\Font;
 /** Small UTF helpers, so the library does not need mbstring or iconv. */
 final class Utf
 {
+    /** Matches text with a Hebrew or Arabic letter in it (or one from their smaller right-to-left relatives). */
+    public const RIGHT_TO_LEFT = '/[\x{0590}-\x{08FF}\x{FB1D}-\x{FDFF}\x{FE70}-\x{FEFC}]/u';
+
     public static function chr(int $cp): string
     {
         if ($cp < 0x80) {

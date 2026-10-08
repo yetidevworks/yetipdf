@@ -9,6 +9,7 @@ use YetiPdf\Core\Lexer;
 use YetiPdf\Core\Stream;
 use YetiPdf\Font\Font;
 use YetiPdf\Font\FontLoader;
+use YetiPdf\Font\Utf;
 
 /**
  * Runs a page's content stream and collects the text it draws.
@@ -24,6 +25,8 @@ use YetiPdf\Font\FontLoader;
 final class Interpreter
 {
     private const MAX_FORM_DEPTH = 12;
+    /** How many held lines back a new piece is compared with, to find the line it carries on from. */
+    private const MAX_LINES_BACK = 400;
 
     /** Gap, as a fraction of the font size, that separates two words. */
     public float $wordGap = 0.11;
@@ -80,6 +83,25 @@ final class Interpreter
     private bool $accentHadPrev = false;
     private float $ax = 0.0;
     private float $ay = 0.0;
+    /** Where the current line starts in the output, and where on the page it began. */
+    private int $lineAt = 0;
+    private float $lx = 0.0;
+    private float $ly = 0.0;
+    /**
+     * The pieces of the current line, held back because it has right-to-left text in it: [start, end, text, size],
+     * with start and end measured along the line. Null on every other line.
+     *
+     * @var list<array{0: float, 1: float, 2: string, 3: float}>|null
+     */
+    private ?array $held = null;
+    /** @var array{0: float, 1: float, 2: float, 3: float} the held line's position across the page, its direction, and its size */
+    private array $heldAt = [0.0, 1.0, 0.0, 0.0];
+    /**
+     * Held lines that have ended, waiting for the page to finish: [position across, direction x, direction y, start, end, pieces].
+     *
+     * @var list<array{0: float, 1: float, 2: float, 3: float, 4: float, 5: list<array{0: float, 1: float, 2: string, 3: float}>}>
+     */
+    private array $lines = [];
 
     // Current transformation matrix.
     private float $a = 1.0;
@@ -124,6 +146,9 @@ final class Interpreter
         $this->out = '';
         $this->hasPrev = false;
         $this->accentAt = -1;
+        $this->lineAt = 0;
+        $this->held = null;
+        $this->lines = [];
         $this->a = $this->d = 1.0;
         $this->b = $this->c = $this->e = $this->f = 0.0;
         $this->font = null;
@@ -151,6 +176,12 @@ final class Interpreter
                 $this->concat(...array_map(fn($v) => (float)$this->file->resolve($v), array_slice($matrix, 0, 6)));
             }
             $this->run($data, $this->file->dict($stream->dict['Resources'] ?? null) ?? $resources, 1, [$stream->num => true]);
+        }
+        if ($this->held !== null) {
+            $this->release();
+        }
+        if ($this->lines !== []) {
+            $this->place();
         }
         return $this->out;
     }
@@ -434,8 +465,17 @@ final class Interpreter
                 $size = abs($this->size) * $hLen;
             }
 
+            if (($font->rtl || $this->held !== null)
+                && $this->hold($text, $x, $y, $ux, $uy, $size, $advance * $hLen, $font->n ?: 1, abs($font->w * $this->size * $this->hScale) * $hLen)) {
+                $this->advance($advance);
+                return;
+            }
+
             $glue = '';
-            if ($this->hasPrev) {
+            if (!$this->hasPrev) {
+                $this->lx = $x;
+                $this->ly = $y;
+            } else {
                 $dx = $x - $this->px;
                 $dy = $y - $this->py;
                 $along = $dx * $this->pux + $dy * $this->puy;
@@ -474,9 +514,13 @@ final class Interpreter
                 if ($this->dehyphenate && $len > 1 && $out[$len - 1] === '-' && ctype_alpha($out[$len - 2])
                     && ($text[0] >= 'a' && $text[0] <= 'z')) {
                     $this->out = substr($out, 0, -1) . $text;
+                    $this->lineAt = $len - 1;
                 } else {
                     $this->out .= "\n" . $text;
+                    $this->lineAt = $len + 1;
                 }
+                $this->lx = $x;
+                $this->ly = $y;
             } elseif ($glue === ' ' && $text[0] !== ' ' && !str_ends_with($this->out, ' ')) {
                 $this->out .= ' ' . $text;
             } else {
@@ -513,6 +557,166 @@ final class Interpreter
 
         $this->te += $advance * $this->ta;
         $this->tf += $advance * $this->tb;
+    }
+
+    /**
+     * Takes a piece of text out of the normal flow when its line has right-to-left text in it.
+     *
+     * Such a line cannot be written out piece by piece: Hebrew and Arabic are drawn left to right like
+     * everything else, so the pieces arrive in an order that depends on the program that made the PDF.
+     * They are kept until the page ends, then sorted by where they sit and put into reading order.
+     * Returns false for ordinary text on an ordinary line, which costs nothing extra.
+     *
+     * $width is how far the text moves the position along the line, $natural how wide its letters are
+     * before any letter spacing is applied.
+     */
+    private function hold(string $text, float $x, float $y, float $ux, float $uy, float $size, float $width, int $letters, float $natural): bool
+    {
+        $same = false;
+        if ($this->hasPrev) {
+            $dx = $x - $this->px;
+            $dy = $y - $this->py;
+            $ref = $size > $this->psize ? $size : $this->psize;
+            $same = abs($dy * $this->pux - $dx * $this->puy) <= $this->lineGap * $ref && ($ux * $this->pux + $uy * $this->puy) >= 0.9;
+        }
+        if ($this->held !== null && !$same) {
+            $this->release();
+        }
+        if ($this->held === null) {
+            if (!preg_match(Utf::RIGHT_TO_LEFT, $text)) {
+                return false;
+            }
+            $this->held = [];
+            $this->heldAt = [$y * $ux - $x * $uy, $ux, $uy, $size];
+            if ($same) {
+                // The line began with ordinary text. Take it back so it can be placed with the rest.
+                $head = substr($this->out, $this->lineAt);
+                $this->out = substr($this->out, 0, $this->lineAt);
+                if ($head !== '') {
+                    $this->held[] = [$this->lx * $this->pux + $this->ly * $this->puy, $this->px * $this->pux + $this->py * $this->puy, $head, $this->psize];
+                }
+            } else {
+                if ($this->hasPrev) {
+                    $this->out .= "\n";
+                }
+                $this->lineAt = strlen($this->out);
+                $this->lx = $x;
+                $this->ly = $y;
+            }
+            $this->accentAt = -1;
+        }
+
+        $start = $x * $ux + $y * $uy;
+        if ($width < 0.0) {
+            // Negative letter spacing makes a string run backwards across the page (one way of writing right to left).
+            // Its first letter is then its rightmost, and each letter still extends to the right of where it is placed.
+            $this->held[] = [$start + $width - $width / $letters, $start + $natural / $letters, Bidi::reverse($text), $size];
+        } else {
+            $this->held[] = [$start, $start + $width, $text, $size];
+        }
+
+        $this->hasPrev = true;
+        $this->psx = $x;
+        $this->psy = $y;
+        $this->ptext = $text;
+        $this->px = $x + $ux * $width;
+        $this->py = $y + $uy * $width;
+        $this->pux = $ux;
+        $this->puy = $uy;
+        $this->psize = $size;
+        return true;
+    }
+
+    /**
+     * Ends the line that hold() has been collecting. Its place in the output is marked, and the
+     * text goes in when the page is finished.
+     */
+    private function release(): void
+    {
+        $held = $this->held ?? [];
+        $this->held = null;
+        [$across, $ux, $uy, $size] = $this->heldAt;
+        $min = INF;
+        $max = -INF;
+        foreach ($held as $piece) {
+            $min = $piece[0] < $min ? $piece[0] : $min;
+            $max = $piece[1] > $max ? $piece[1] : $max;
+        }
+
+        // A line is not always drawn in one go: print drivers cut wide lines into strips and draw the
+        // page strip by strip. Pieces that carry on from a line already seen on this page join it.
+        for ($i = count($this->lines) - 1, $oldest = max(0, $i - self::MAX_LINES_BACK); $i >= $oldest; $i--) {
+            $line = $this->lines[$i];
+            if (abs($line[0] - $across) <= 0.1 * $size && $line[1] * $ux + $line[2] * $uy >= 0.99 && $min <= $line[4] + $size && $max >= $line[3] - $size) {
+                $this->lines[$i][3] = $min < $line[3] ? $min : $line[3];
+                $this->lines[$i][4] = $max > $line[4] ? $max : $line[4];
+                $this->lines[$i][5] = array_merge($line[5], $held);
+                // Nothing of this line stays here, so neither does the line break that led up to it.
+                if (strlen($this->out) === $this->lineAt && str_ends_with($this->out, "\n")) {
+                    $this->out = substr($this->out, 0, -1);
+                }
+                return;
+            }
+        }
+        $this->out .= "\0\x1E" . count($this->lines) . "\x1E\0";
+        $this->lines[] = [$across, $ux, $uy, $min, $max, $held];
+    }
+
+    /** Puts the text of the held lines where release() marked them. */
+    private function place(): void
+    {
+        $text = [];
+        foreach ($this->lines as $i => $line) {
+            $pieces = $line[5];
+            // Left to right along the line. A vowel mark has no width and sits on its letter, so it sorts after it.
+            usort($pieces, static fn(array $a, array $b): int => [$a[0], $b[1] - $b[0]] <=> [$b[0], $a[1] - $a[0]]);
+
+            $visual = '';
+            $end = 0.0;
+            $before = null;
+            foreach ($pieces as $piece) {
+                [$start, $stop, $part, $size] = $piece;
+                if ($before !== null) {
+                    // The same text drawn again at the same spot is fake bold.
+                    if ($part === $before[2] && abs($start - $before[0]) < 0.2 * $size) {
+                        continue;
+                    }
+                    if ($start - $end > $this->wordGap * $size && $part[0] !== ' ' && !str_ends_with($visual, ' ')) {
+                        $visual .= ' ';
+                    } elseif ($end - $start > 0.2 * $size && $stop > $start) {
+                        $part = self::withoutOverlap($visual, $part, ($end - $start) / ($stop - $start));
+                    }
+                }
+                if ($stop - $start < 0.01 * $size && $visual !== '' && preg_match('/^\p{Mn}+$/u', $part) && preg_match('/[^\x80-\xBF][\x80-\xBF]*$/', $visual, $last)) {
+                    // A mark drawn on its own: put it in front of its letter, so that it follows the letter once the line is turned around.
+                    $visual = substr($visual, 0, -strlen($last[0])) . $part . $last[0];
+                } else {
+                    $visual .= $part;
+                }
+                $end = $before === null || $stop > $end ? $stop : $end;
+                $before = $piece;
+            }
+            $text["\0\x1E$i\x1E\0"] = Bidi::logical($visual);
+        }
+        $this->out = strtr($this->out, $text);
+        $this->lines = [];
+    }
+
+    /**
+     * Two strips of a line overlap a little where they meet, and the letters in the overlap are drawn in both.
+     * When the start of a piece repeats the end of the text before it, over about the share of its width
+     * that overlaps, the repeat is dropped.
+     */
+    private static function withoutOverlap(string $before, string $part, float $share): string
+    {
+        $chars = preg_split('//u', $part, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $guess = (int)round($share * count($chars));
+        foreach ([$guess, $guess + 1, $guess - 1] as $n) {
+            if ($n >= 1 && $n <= count($chars) && str_ends_with($before, $head = implode('', array_slice($chars, 0, $n)))) {
+                return substr($part, strlen($head));
+            }
+        }
+        return $part;
     }
 
     private static function compose(string $text, string $mark): string
