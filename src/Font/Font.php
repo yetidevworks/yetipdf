@@ -14,6 +14,10 @@ namespace YetiPdf\Font;
 final class Font
 {
     private const MEMO_LIMIT = 1000;
+    /** Stands in for a glyph that has a width but no known character. It reaches the page text as a space. */
+    public const GAP = "\x1F";
+    /** Width, in text units, from which such a glyph counts as a gap between words. */
+    public const GAP_WIDTH = 0.1;
 
     /** Single-byte codes (Type1, TrueType, Type3) or multi-byte (Type0). */
     public bool $simple = true;
@@ -36,6 +40,8 @@ final class Font
     public array $codespaces = [];
     /** True when the font gave no way to map codes to text. */
     public bool $unmapped = false;
+    /** True once any code has been mapped to GAP. */
+    public bool $gaps = false;
 
     /** Width of the last decoded string in text units (before font size is applied). */
     public float $w = 0.0;
@@ -76,6 +82,11 @@ final class Font
             $this->sp = 0;
         } else {
             $text = $this->decodeComposite($s);
+        }
+
+        // A string of nothing but gaps is left to the positions on the page, which already tell words apart.
+        if ($this->gaps && trim($text, self::GAP) === '') {
+            $text = '';
         }
 
         if (strlen($s) <= 48) {
@@ -149,6 +160,9 @@ final class Font
         if ($text === null) {
             if ($this->codesAreUnicode) {
                 $text = ($code >= 0xD800 && $code <= 0xDFFF) ? '' : Utf::chr($code);
+            } elseif (!$this->unmapped && ($this->widths[$code] ?? 0.0) * $this->scale >= self::GAP_WIDTH) {
+                $text = self::GAP;
+                $this->gaps = true;
             } else {
                 $text = '';
             }

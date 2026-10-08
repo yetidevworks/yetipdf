@@ -199,8 +199,6 @@ final class FontLoader
             // Every glyph has a made-up name and there is no ToUnicode, so the text is a guess.
             $font->unmapped = true;
         }
-        $font->map = self::strtrMap($table);
-
         $font->defaultWidth = (float)($file->resolve($descriptor['MissingWidth'] ?? 0) ?? 0);
         $widths = $file->resolve($dict['Widths'] ?? null);
         if (is_array($widths)) {
@@ -210,6 +208,16 @@ final class FontLoader
                     $width = $file->resolve($width);
                 }
                 $font->widths[$first + $i] = (float)$width;
+            }
+            // A glyph with no known character but a real width still separates what is on either side
+            // of it. Most often it is the space glyph, left out of the font's character map, and
+            // without this the words around it come out glued together.
+            $gap = Font::GAP_WIDTH / ($subtype === '/Type3' ? $this->type3Scale($dict) : 0.001);
+            foreach ($table as $code => $text) {
+                if ($text === '' && ($font->widths[$code] ?? 0.0) >= $gap) {
+                    $table[$code] = Font::GAP;
+                    $font->gaps = true;
+                }
             }
         } else {
             $metrics = stripos($baseFont, 'Times') !== false ? self::TIMES : self::HELVETICA;
@@ -221,10 +229,17 @@ final class FontLoader
         }
 
         if ($subtype === '/Type3') {
-            $matrix = $file->resolve($dict['FontMatrix'] ?? null);
-            $font->scale = (is_array($matrix) && isset($matrix[0]) && (float)$matrix[0] != 0.0) ? abs((float)$matrix[0]) : 0.001;
+            $font->scale = $this->type3Scale($dict);
         }
+        $font->map = self::strtrMap($table);
         return $font;
+    }
+
+    /** @param array<string, mixed> $dict */
+    private function type3Scale(array $dict): float
+    {
+        $matrix = $this->file->resolve($dict['FontMatrix'] ?? null);
+        return (is_array($matrix) && isset($matrix[0]) && (float)$matrix[0] != 0.0) ? abs((float)$matrix[0]) : 0.001;
     }
 
     /** @param array<string, mixed> $dict */

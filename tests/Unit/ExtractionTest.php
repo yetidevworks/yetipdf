@@ -170,4 +170,21 @@ final class ExtractionTest extends TestCase
         $this->assertSame('', $doc->page(0));
         $this->assertSame('', $doc->page(4));
     }
+
+    public function testGlyphWithAWidthButNoCharacterSeparatesWords(): void
+    {
+        // Code 2 is the font's space glyph under a made-up name, which nothing maps to a character.
+        $widths = implode(' ', array_fill(0, 126, 500));
+        $font = "/Subtype /Type1 /BaseFont /Custom /FirstChar 0 /Widths [0 0 250 $widths] /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [2 /g3] >>";
+        $pdf = PdfBuilder::build(["BT /F1 10 Tf 72 720 Td (Perceived\002Ease\002of\002Use) Tj ET"], ['F1' => $font]);
+        $this->assertSame('Perceived Ease of Use', YetiPdf::parse($pdf)->text());
+
+        // On its own it adds nothing: the positions of the strings around it already tell the words apart.
+        $pdf = PdfBuilder::build(["BT /F1 10 Tf 72 720 Td (One) Tj (\002) Tj (Two) Tj 0 -12 Td (\002) Tj 0 -12 Td (Three) Tj ET"], ['F1' => $font]);
+        $this->assertSame("One Two\nThree", YetiPdf::parse($pdf)->text());
+
+        // A code with no width is not a gap.
+        $pdf = PdfBuilder::build(["BT /F1 10 Tf 72 720 Td (No\001gap) Tj ET"], ['F1' => $font]);
+        $this->assertSame('Nogap', YetiPdf::parse($pdf)->text());
+    }
 }
