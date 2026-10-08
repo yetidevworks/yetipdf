@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace YetiPdf\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use YetiPdf\Exception\InvalidPdfException;
 use YetiPdf\Tests\PdfBuilder;
@@ -127,6 +128,68 @@ final class ExtractionTest extends TestCase
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td (page) Tj ET q 1 0 0 1 72 600 cm /Fm1 Do Q'], [], [100 => $form]);
         $pdf = str_replace('/Resources << /Font << /F1 10 0 R >> >> /Contents', '/Resources << /Font << /F1 10 0 R >> /XObject << /Fm1 100 0 R >> >> /Contents', $pdf);
         $this->assertSame("page\ninside form", YetiPdf::parse($pdf)->text());
+    }
+
+    /** A one-page file ("still read") ending in a cross-reference stream with the given dictionary entries and rows. */
+    private static function withXrefStream(string $entries, callable $rows): string
+    {
+        $content = 'BT /F1 12 Tf 72 720 Td (still read) Tj ET';
+        $objects = [
+            1 => '<< /Type /Catalog /Pages 2 0 R >>',
+            2 => '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            3 => '<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+            4 => '<< /Length ' . strlen($content) . " >>\nstream\n$content\nendstream",
+            5 => '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        ];
+        $pdf = "%PDF-1.5\n";
+        $offsets = [];
+        foreach ($objects as $number => $body) {
+            $offsets[$number] = strlen($pdf);
+            $pdf .= "$number 0 obj\n$body\nendobj\n";
+        }
+        $data = $rows($offsets);
+        $at = strlen($pdf);
+        return $pdf . "6 0 obj\n<< /Type /XRef /Root 1 0 R $entries /Length " . strlen($data) . " >>\nstream\n$data\nendstream\nendobj\nstartxref\n$at\n%%EOF\n";
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function brokenXrefStreams(): iterable
+    {
+        yield 'a width that is a string' => ['/Size 7 /W [<01> 2 1]'];
+        yield 'another width that is a string' => ['/Size 7 /W [1 (x) 1]'];
+        yield 'a negative width' => ['/Size 7 /W [-1 3 1]'];
+        yield 'a width no number has' => ['/Size 7 /W [1 9 1]'];
+        yield 'an index that is not numbers' => ['/Size 7 /W [1 2 1] /Index [(a) 3]'];
+        yield 'a size that is not a number' => ['/Size (big) /W [1 2 1]'];
+    }
+
+    #[DataProvider('brokenXrefStreams')]
+    public function testCrossReferenceStreamThatCannotBeReadRaisesNothing(string $entries): void
+    {
+        $pdf = self::withXrefStream($entries, static fn(array $offsets): string => str_repeat("\x01\x00\x10\x00", 6));
+        // Recorded, not thrown: the reader catches what is thrown while it reads the table, and would hide it.
+        $raised = [];
+        set_error_handler(static function (int $no, string $message) use (&$raised): bool {
+            $raised[] = $message;
+            return true;
+        });
+        try {
+            $text = YetiPdf::parse($pdf)->text();
+        } finally {
+            restore_error_handler();
+        }
+        $this->assertSame([], $raised);
+        $this->assertSame('still read', $text);
+    }
+
+    public function testTableWithNoEntryForTheCatalogIsRebuilt(): void
+    {
+        // A well-formed table that lists the content stream and nothing else. It is not empty, so it used to be believed.
+        $pdf = self::withXrefStream('/Size 7 /W [1 2 1] /Index [4 1]', static fn(array $offsets): string => "\x01" . pack('n', $offsets[4]) . "\x00");
+        $doc = YetiPdf::parse($pdf);
+
+        $this->assertSame('still read', $doc->text());
+        $this->assertSame(['Cross-reference table was missing or damaged; rebuilt by scanning the file'], $doc->warnings());
     }
 
     public function testDamagedCrossReferenceTableIsRebuilt(): void

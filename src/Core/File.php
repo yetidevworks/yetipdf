@@ -92,6 +92,12 @@ final class File
                 $this->indexContainers();
             }
         }
+
+        // A table can be damaged and still hold entries, only not one for the catalog. Nothing after this
+        // point would find a page, so the file is scanned now.
+        if (!$this->rebuilt && !is_array($this->resolve($this->trailer['Root']))) {
+            $this->rebuild();
+        }
     }
 
     /** @return array<string, mixed> */
@@ -432,19 +438,28 @@ final class File
         if (!is_array($w) || count($w) < 3) {
             return;
         }
-        [$w0, $w1, $w2] = [(int)$w[0], (int)$w[1], (int)$w[2]];
+        // The three field widths, in bytes. Anything that is not a small whole number means the table cannot be read.
+        [$w0, $w1, $w2] = [$w[0] ?? null, $w[1] ?? null, $w[2] ?? null];
+        foreach ([$w0, $w1, $w2] as $width) {
+            if (!is_int($width) || $width < 0 || $width > 8) {
+                return;
+            }
+        }
         $rowLen = $w0 + $w1 + $w2;
         if ($rowLen <= 0) {
             return;
         }
         // An entry takes at least a few bytes of the file, so a table longer than the file is not telling the truth.
         $data = $this->streamData($stream, false, strlen($this->data) + 65536) ?? '';
-        $index = is_array($dict['Index'] ?? null) ? $dict['Index'] : [0, (int)($dict['Size'] ?? 0)];
+        $index = is_array($dict['Index'] ?? null) ? array_values($dict['Index']) : [0, $dict['Size'] ?? 0];
         $pos = 0;
         $len = min(strlen($data), max(1 << 16, intdiv(strlen($this->data), 2)) * $rowLen);
         for ($s = 0; $s + 1 < count($index); $s += 2) {
-            $num = (int)$index[$s];
-            $count = (int)$index[$s + 1];
+            $num = $index[$s];
+            $count = $index[$s + 1];
+            if (!is_int($num) || !is_int($count)) {
+                break;
+            }
             for ($i = 0; $i < $count && $pos + $rowLen <= $len; $i++, $pos += $rowLen) {
                 $type = $w0 === 0 ? 1 : self::beInt($data, $pos, $w0);
                 if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
