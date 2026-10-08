@@ -27,8 +27,6 @@ final class Font
     private const CACHE_BYTES = 8 << 20;
     /** Strings longer than this are decoded in pieces of this many bytes (an even number, so no two-byte code is split). */
     private const PIECE = 16384;
-    /** With less memory than this left, a font stops remembering what it has decoded. Each font doing so is what would use the rest up. */
-    private const LOW_MEMORY = 16 << 20;
     /** Longest text the string cache keeps for one string. A character map can make 48 bytes stand for kilobytes. */
     private const MEMO_TEXT = 256;
 
@@ -85,7 +83,7 @@ final class Font
     private ?array $turned = null;
     private int $codeTextBytes = 0;
     private int $lookups = 0;
-    /** True while memory is short; see LOW_MEMORY. */
+    /** True while memory is short. The font then stops remembering what it has decoded: every font doing that is what would use the rest up. */
     private bool $short = false;
     /** Longest text one byte stands for in a simple font, worked out when a long string first needs it. */
     private ?int $longest = null;
@@ -360,7 +358,7 @@ final class Font
             $this->rtl = true;
         }
         if ((++$this->lookups & 0xFF) === 0) {
-            $this->short = Memory::left() < self::LOW_MEMORY;
+            $this->short = Memory::short();
         }
         if ($this->short || $this->codeTextBytes > self::CACHE_BYTES) {
             $this->codeText = [];

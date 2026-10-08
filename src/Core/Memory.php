@@ -17,6 +17,17 @@ final class Memory
         return $limit === null ? self::CEILING : min(self::CEILING, max(0, $limit - memory_get_usage(true)));
     }
 
+    /**
+     * Whether so little is left that nothing more should be kept for later: fonts stop being read and stop
+     * remembering what they decoded. "Little" is an eighth of the limit, and between 4MB and 16MB, so a
+     * process that was only ever given 16MB is not treated as out of memory from the start.
+     */
+    public static function short(): bool
+    {
+        $limit = self::limit();
+        return $limit !== null && $limit - memory_get_usage(true) < max(4 << 20, min(16 << 20, $limit >> 3));
+    }
+
     /** PHP's memory_limit in bytes, or null when there is none. */
     private static function limit(): ?int
     {

@@ -82,8 +82,11 @@ final class FontLoader
     private int $kept = 0;
     /** Goes up each time the fonts kept here are let go, so that anything else holding on to them can let go too. */
     public int $flushes = 0;
-    /** With less memory than this left, no more fonts are read. Text set in them is left out, which beats the process dying. */
-    public int $lowMemory = 16 << 20;
+    /**
+     * With less memory than this left, no more fonts are read. Text set in them is left out, which beats the
+     * process dying. Null means what Memory::short() says; tests set a number.
+     */
+    public ?int $lowMemory = null;
     private ?Font $blank = null;
 
     public function __construct(private readonly File $file)
@@ -96,14 +99,14 @@ final class FontLoader
         if (isset($this->cache[$key])) {
             return $this->cache[$key];
         }
-        $low = Memory::left() < $this->lowMemory;
+        $low = $this->short();
         if ($low || count($this->cache) >= self::CACHE_LIMIT || $this->kept > $this->file->limit()) {
             $this->cache = [];
             $this->kept = 0;
             $this->flushes++;
             if ($low) {
                 gc_mem_caches();
-                if (Memory::left() < $this->lowMemory) {
+                if ($this->short()) {
                     $this->file->warn('There are more fonts than fit in the memory that is left; text set in the rest was left out');
                     return $this->blank ??= self::blank();
                 }
@@ -126,6 +129,11 @@ final class FontLoader
         $font->warn = $this->file->warn(...);
         $this->kept += max(0, memory_get_usage() - $before);
         return $this->cache[$key] = $font;
+    }
+
+    private function short(): bool
+    {
+        return $this->lowMemory === null ? Memory::short() : Memory::left() < $this->lowMemory;
     }
 
     /** A font in which every code is no text at all. */
