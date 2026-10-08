@@ -305,19 +305,41 @@ final class File
         }
         $data = $this->streamData($stream) ?? '';
         $first = (int)$this->resolve($stream->dict['First'] ?? 0);
-        // Each pair of numbers in the header costs a PHP string or two, so how many are read depends on the memory
-        // that is left. A real header is about 20 bytes a pair, which is also how much of it is looked at.
-        $n = min((int)$this->resolve($stream->dict['N'] ?? 0), intdiv($this->room(), 2048));
+        // Each object listed costs about 80 bytes here and in the table, whatever the stream says it holds.
+        $n = min((int)$this->resolve($stream->dict['N'] ?? 0), intdiv($this->room(), 320));
+        return [$data, self::objectOffsets($data, $first, $n)];
+    }
+
+    /**
+     * Object number => offset of its value, from the pairs of numbers at the start of an object stream.
+     * The header is read in slices, so a header of millions of numbers does not become millions of strings at once.
+     *
+     * @return array<int, int>
+     */
+    private static function objectOffsets(string $data, int $first, int $count): array
+    {
         $offsets = [];
-        if (preg_match_all('/(\d+)\s+(\d+)/', substr($data, 0, min($first, $n * 24)), $m)) {
-            foreach ($m[1] as $i => $num) {
-                if ($i >= $n) {
+        $length = max(0, min($first, strlen($data)));
+        $number = null;
+        $read = 0;
+        for ($at = 0, $end = 0; $end < $length && $read < $count; $at = $end) {
+            $end = min($length, $at + 65536);
+            // Finish the number the slice ends in, so none is cut in two.
+            $end += strspn($data, '0123456789', $end, $length - $end);
+            preg_match_all('/\d+/', substr($data, $at, $end - $at), $m);
+            foreach ($m[0] as $digits) {
+                if ($number === null) {
+                    $number = (int)$digits;
+                    continue;
+                }
+                $offsets[$number] = $first + (int)$digits;
+                $number = null;
+                if (++$read >= $count) {
                     break;
                 }
-                $offsets[(int)$num] = $first + (int)$m[2][$i];
             }
         }
-        return [$data, $offsets];
+        return $offsets;
     }
 
     private function readXref(): void

@@ -489,25 +489,36 @@ final class HardeningTest extends TestCase
         $this->assertContains('Cross-reference table was missing or damaged; rebuilt by scanning the file', $doc->warnings());
     }
 
-    public function testAnObjectStreamHeaderIsReadOnlyAsFarAsTheMemoryAllows(): void
+    private static function objectStreamFile(int $objects): string
     {
         $pairs = '';
-        $objects = '';
-        for ($i = 0; $i < 1000; $i++) {
-            $pairs .= (5 + $i) . ' ' . strlen($objects) . ' ';
-            $objects .= "<< /K $i >> ";
+        $values = '';
+        for ($i = 0; $i < $objects; $i++) {
+            $pairs .= (5 + $i) . ' ' . strlen($values) . "\n";
+            $values .= "$i ";
         }
-        $pdf = "%PDF-1.5\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
-            . '3 0 obj' . "\n<< /Type /ObjStm /N 1000 /First " . strlen($pairs) . ' /Length ' . strlen($pairs . $objects) . " >>\nstream\n$pairs$objects\nendstream\nendobj\n"
+        return "%PDF-1.5\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+            . '3 0 obj' . "\n<< /Type /ObjStm /N $objects /First " . strlen($pairs) . ' /Length ' . strlen($pairs . $values) . " >>\nstream\n$pairs$values\nendstream\nendobj\n"
             . "trailer << /Root 1 0 R >>\n";
+    }
 
-        $roomy = new File($pdf);
-        $this->assertSame(['K' => 999], $roomy->get(1004));
+    public function testAnObjectStreamWithManyObjectsIsReadInFull(): void
+    {
+        // Real files have these: one in the test corpus lists 65,000 objects. The header is read in slices.
+        $file = new File(self::objectStreamFile(70000));
 
-        // A megabyte allows 512 entries.
-        $tight = new File($pdf, '', 1 << 20);
-        $this->assertSame(['K' => 511], $tight->get(516));
-        $this->assertNull($tight->get(517));
+        $this->assertSame(0, $file->get(5));
+        $this->assertSame(32767, $file->get(5 + 32767));
+        $this->assertSame(69999, $file->get(5 + 69999));
+    }
+
+    public function testAnObjectStreamIsOnlyReadAsFarAsTheMemoryAllows(): void
+    {
+        // A megabyte allows 3,276 objects.
+        $file = new File(self::objectStreamFile(5000), '', 1 << 20);
+
+        $this->assertSame(3275, $file->get(5 + 3275));
+        $this->assertNull($file->get(5 + 3276));
     }
 
     public function testStreamsWithNoEndstreamAreStillCutAtTheirObjectEnd(): void
