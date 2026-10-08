@@ -292,7 +292,8 @@ final class Interpreter
                 // One token holds every number up to the next operator, so the thousands of path
                 // coordinates on a page cost one loop step per operator rather than one per number.
                 if ($array === null) {
-                    $stack[] = $tok;
+                    // Operators read at most six numbers, and a run of them can be megabytes long.
+                    $stack[] = isset($tok[1024]) ? self::tail($tok) : $tok;
                 } elseif (strpbrk($tok, " \n\r\t") === false) {
                     $array[] = (float)$tok;
                 } else {
@@ -377,7 +378,7 @@ final class Interpreter
 
                 case 'Td':
                 case 'TD':
-                    $v = self::operands(end($stack));
+                    $v = self::numbers(end($stack));
                     $n = count($v);
                     if ($n >= 2) {
                         $tx = $v[$n - 2];
@@ -397,7 +398,7 @@ final class Interpreter
                     break;
 
                 case 'Tm':
-                    $v = self::operands(end($stack));
+                    $v = self::numbers(end($stack));
                     $n = count($v);
                     if ($n >= 6) {
                         $this->ta = $this->la = $v[$n - 6];
@@ -423,7 +424,7 @@ final class Interpreter
 
                 case '"':
                     $n = count($stack);
-                    $v = $n >= 2 ? self::operands($stack[$n - 2]) : [];
+                    $v = $n >= 2 ? self::numbers($stack[$n - 2]) : [];
                     if (count($v) >= 2) {
                         $this->wordSpace = $v[count($v) - 2];
                         $this->charSpace = $v[count($v) - 1];
@@ -473,7 +474,7 @@ final class Interpreter
                     break;
 
                 case 'cm':
-                    $v = self::operands(end($stack));
+                    $v = self::numbers(end($stack));
                     $n = count($v);
                     if ($n >= 6) {
                         $this->concat($v[$n - 6], $v[$n - 5], $v[$n - 4], $v[$n - 3], $v[$n - 2], $v[$n - 1]);
@@ -995,12 +996,16 @@ final class Interpreter
     }
 
     /**
-     * Splits a token holding one or more numbers.
+     * Splits a token holding one or more numbers. Anything else gives none: a broken stream can put
+     * a string or an array where an operator's numbers should be.
      *
      * @return list<float>
      */
-    private static function numbers(string $run): array
+    private static function numbers(mixed $run): array
     {
+        if (!is_string($run)) {
+            return [];
+        }
         if (isset($run[4096])) {
             // A very long run: walk it rather than build a second array holding every number as a string.
             $out = [];
@@ -1023,16 +1028,6 @@ final class Interpreter
         return $out;
     }
 
-    /**
-     * The numbers in front of an operator, or none when something else is there (a broken stream can put a string or an array in their place).
-     *
-     * @return list<float>
-     */
-    private static function operands(mixed $run): array
-    {
-        return is_string($run) ? self::numbers(isset($run[1024]) ? self::tail($run) : $run) : [];
-    }
-
     /** The end of a run of numbers. Operators read at most six, and a run can be megabytes long. */
     private static function tail(string $run): string
     {
@@ -1049,7 +1044,7 @@ final class Interpreter
         if (strpbrk($run, " \n\r\t") === false) {
             return (float)$run;
         }
-        $numbers = self::numbers(isset($run[1024]) ? self::tail($run) : $run);
+        $numbers = self::numbers($run);
         return $numbers === [] ? 0.0 : $numbers[count($numbers) - 1];
     }
 
