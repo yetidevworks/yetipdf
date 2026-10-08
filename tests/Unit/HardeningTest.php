@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace YetiPdf\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use YetiPdf\Content\Interpreter;
 use YetiPdf\Core\File;
 use YetiPdf\Core\Ref;
 use YetiPdf\Document;
@@ -332,5 +333,61 @@ final class HardeningTest extends TestCase
 
         $this->assertSame([], $font->widths);
         $this->assertEqualsWithDelta(0.5, self::widthOf($font, 40000), 1e-9);
+    }
+
+    /**
+     * Forms 0 to $depth - 1, each drawing the next one $fan times; the last one shows an "x".
+     *
+     * @return array{0: File, 1: array<string, mixed>}
+     */
+    private static function nestedForms(int $depth, int $fan): array
+    {
+        $extra = [];
+        for ($i = 0; $i < $depth; $i++) {
+            $last = $i === $depth - 1;
+            $body = $last ? 'BT /F1 12 Tf (x) Tj ET' : str_repeat('/X' . ($i + 1) . ' Do ', $fan);
+            $resources = $last ? '/Font << /F1 10 0 R >>' : '/XObject << /X' . ($i + 1) . ' ' . (101 + $i) . ' 0 R >>';
+            $extra[100 + $i] = PdfBuilder::stream($body, false, "/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << $resources >>");
+        }
+        return [new File(PdfBuilder::build(['placeholder'], [], $extra)), ['XObject' => ['X0' => new Ref(100, 0)]]];
+    }
+
+    public function testFormsDrawingFormsStopAtThePageBudget(): void
+    {
+        [$file, $resources] = self::nestedForms(12, 3);
+        $interpreter = new Interpreter($file, new FontLoader($file));
+
+        // Three to the eleventh power is 177,147 runs of the last form; the page gets 20,000 runs of any form.
+        $drawn = strlen($interpreter->page('/X0 Do', $resources));
+        $this->assertGreaterThan(5000, $drawn);
+        $this->assertLessThan(20000, $drawn);
+        $this->assertSame(['A page draws forms so many times that the rest of its drawing was skipped'], $file->warnings);
+    }
+
+    public function testASmallExplicitFormBudgetIsHonoured(): void
+    {
+        [$file, $resources] = self::nestedForms(4, 3);
+        $interpreter = new Interpreter($file, new FontLoader($file));
+        $interpreter->maxFormRuns = 10;
+        $interpreter->page('/X0 Do', $resources);
+        $this->assertCount(1, $file->warnings);
+
+        // The same page under a budget it fits in is read in full, and the budget starts over on the next page.
+        [$file, $resources] = self::nestedForms(4, 3);
+        $interpreter = new Interpreter($file, new FontLoader($file));
+        $interpreter->maxFormRuns = 50;
+        $this->assertSame(str_repeat('x', 27), $interpreter->page('/X0 Do', $resources));
+        $this->assertSame(str_repeat('x', 27), $interpreter->page('/X0 Do', $resources));
+        $this->assertSame([], $file->warnings);
+    }
+
+    public function testFormBytesAreBudgetedToo(): void
+    {
+        [$file, $resources] = self::nestedForms(2, 5);
+        $interpreter = new Interpreter($file, new FontLoader($file));
+        $interpreter->maxFormBytes = 40;
+        $interpreter->page('/X0 Do', $resources);
+
+        $this->assertCount(1, $file->warnings);
     }
 }

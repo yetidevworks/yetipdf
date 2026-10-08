@@ -36,6 +36,14 @@ final class Interpreter
     /** How much of the text before a piece is looked at for letters the piece repeats. */
     private const OVERLAP = 256;
 
+    /**
+     * What one page may spend on form XObjects (and annotation appearances): how many it draws, and how many bytes
+     * of content they add up to. Forms can draw forms, so a few lines can ask for billions of runs. The busiest page
+     * in 1,009 real documents draws 1,016 forms and 3.4MB of them.
+     */
+    public int $maxFormRuns = 20000;
+    public int $maxFormBytes = 64 << 20;
+
     /** Gap, as a fraction of the font size, that separates two words. */
     public float $wordGap = 0.11;
     /** Distance off the baseline, as a fraction of the font size, that starts a new line. */
@@ -84,6 +92,8 @@ final class Interpreter
     private string $out = '';
     /** @var list<string> output that is finished with, oldest first; $out carries on from it */
     private array $done = [];
+    private int $formRuns = 0;
+    private int $formBytes = 0;
     private bool $hasPrev = false;
     private float $px = 0.0;
     private float $py = 0.0;
@@ -177,14 +187,19 @@ final class Interpreter
         $this->font = null;
         $this->size = $this->charSpace = $this->wordSpace = $this->leading = 0.0;
         $this->hScale = 1.0;
+        $this->formRuns = $this->formBytes = 0;
 
         $this->run($content, $resources, 0, []);
 
         foreach ($appearances as [$stream, $x, $y]) {
+            if (!$this->formAllowed()) {
+                break;
+            }
             $data = $this->file->streamData($stream);
             if ($data === null || $data === '') {
                 continue;
             }
+            $this->formBytes += strlen($data);
             $this->a = $this->d = 1.0;
             $this->b = $this->c = 0.0;
             $this->e = $x;
@@ -862,6 +877,17 @@ final class Interpreter
         ] = $s;
     }
 
+    /** Counts one more form run against the page's budget, or says the budget is spent. */
+    private function formAllowed(): bool
+    {
+        if ($this->formRuns >= $this->maxFormRuns || $this->formBytes > $this->maxFormBytes) {
+            $this->file->warn('A page draws forms so many times that the rest of its drawing was skipped');
+            return false;
+        }
+        $this->formRuns++;
+        return true;
+    }
+
     /**
      * @param array<string, mixed> $resources
      * @param array<int, true> $active
@@ -874,7 +900,7 @@ final class Interpreter
         if (!$stream instanceof Stream || ($stream->dict['Subtype'] ?? null) !== '/Form') {
             return;
         }
-        if (isset($active[$stream->num])) {
+        if (isset($active[$stream->num]) || !$this->formAllowed()) {
             return;
         }
         $active[$stream->num] = true;
@@ -883,6 +909,7 @@ final class Interpreter
         if ($content === null || $content === '') {
             return;
         }
+        $this->formBytes += strlen($content);
 
         $state = $this->snapshot();
         $textState = [$this->ta, $this->tb, $this->tc, $this->td, $this->te, $this->tf, $this->la, $this->lb, $this->lc, $this->ld, $this->le, $this->lf];
