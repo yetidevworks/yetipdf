@@ -8,6 +8,7 @@ use YetiPdf\Core\File;
 use YetiPdf\Core\PdfString;
 use YetiPdf\Core\Ref;
 use YetiPdf\Core\Stream;
+use YetiPdf\Filter\Filters;
 
 /**
  * Builds Font objects from font dictionaries.
@@ -416,6 +417,11 @@ final class FontLoader
             return null;
         }
         $cmap = CMap::parse($data);
+        // Some writers compress a ToUnicode stream and forget to declare /FlateDecode. A zlib header (0x78 and a
+        // checksum that divides by 31) is unlikely to start real CMap text, so inflate it once and read again.
+        if ($cmap->isEmpty() && strlen($data) > 2 && (ord($data[0]) & 0x0F) === 8 && ((ord($data[0]) << 8) | ord($data[1])) % 31 === 0) {
+            $cmap = CMap::parse(Filters::flate($data));
+        }
         return $cmap->isEmpty() ? null : $cmap;
     }
 

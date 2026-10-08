@@ -93,6 +93,20 @@ final class ExtractionTest extends TestCase
         $this->assertSame('日本', YetiPdf::parse($pdf)->text());
     }
 
+    public function testToUnicodeCompressedWithoutDeclaringTheFilter(): void
+    {
+        $cmap = "1 begincodespacerange <0000> <FFFF> endcodespacerange\n2 beginbfchar <0001> <65E5> <0002> <672C> endbfchar";
+        $pdf = PdfBuilder::build(
+            ['BT /F1 10 Tf 72 720 Td <00010002> Tj ET'],
+            ['F1' => '/Subtype /Type0 /BaseFont /Custom /Encoding /Identity-H /DescendantFonts [101 0 R] /ToUnicode 100 0 R'],
+            [100 => PdfBuilder::stream((string)gzcompress($cmap)), 101 => '<< /Type /Font /Subtype /CIDFontType2 /DW 1000 >>']
+        );
+        $doc = YetiPdf::parse($pdf);
+
+        $this->assertSame('日本', $doc->text());
+        $this->assertSame([], $doc->warnings());
+    }
+
     public function testAccentDrawnOverLetterIsComposed(): void
     {
         // How TeX draws "é": the acute accent, then back up and draw the letter under it.
