@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace YetiPdf\Font;
 
+use YetiPdf\Core\Memory;
+
 /**
  * Everything the content interpreter needs from a font: how to turn the bytes of a shown string
  * into text, and how far that string moves the text position.
@@ -25,6 +27,10 @@ final class Font
     private const CACHE_BYTES = 8 << 20;
     /** Strings longer than this are decoded in pieces of this many bytes (an even number, so no two-byte code is split). */
     private const PIECE = 16384;
+    /** With less memory than this left, a font stops remembering what it has decoded. Each font doing so is what would use the rest up. */
+    private const LOW_MEMORY = 16 << 20;
+    /** Longest text the string cache keeps for one string. A character map can make 48 bytes stand for kilobytes. */
+    private const MEMO_TEXT = 256;
 
     /** Single-byte codes (Type1, TrueType, Type3) or multi-byte (Type0). */
     public bool $simple = true;
@@ -78,6 +84,11 @@ final class Font
     /** @var array<int|string, string>|null byte (simple) or code (composite) => text as drawn() gives it */
     private ?array $turned = null;
     private int $codeTextBytes = 0;
+    private int $lookups = 0;
+    /** True while memory is short; see LOW_MEMORY. */
+    private bool $short = false;
+    /** Longest text one byte stands for in a simple font, worked out when a long string first needs it. */
+    private ?int $longest = null;
     /** @var array<int, float> composite code => width, for fonts with $widthIndex */
     private array $widthCache = [];
 
@@ -100,6 +111,9 @@ final class Font
             $this->w = $w * $this->scale;
             $this->n = strlen($s);
             $this->sp = $sp;
+            if (isset($s[self::PIECE])) {
+                $s = $this->within($s);
+            }
             $text = strtr($s, $this->map);
             if (!$this->rtlKnown) {
                 $this->rtlKnown = true;
@@ -121,7 +135,7 @@ final class Font
             $text = '';
         }
 
-        if (strlen($s) <= 48) {
+        if (strlen($s) <= 48 && strlen($text) <= self::MEMO_TEXT) {
             if (count($this->memo) >= self::MEMO_LIMIT) {
                 $this->memo = [];
             }
@@ -142,7 +156,7 @@ final class Font
     {
         if ($this->simple) {
             $this->turned ??= array_map(self::turn(...), $this->map);
-            return strtr($s, $this->turned);
+            return strtr(isset($s[self::PIECE]) ? $this->within($s) : $s, $this->turned);
         }
         if ($this->charset !== null) {
             return $this->decode($s);
@@ -151,7 +165,7 @@ final class Font
         if ($this->codespaces !== []) {
             for ($i = 0, $n = 0, $len = strlen($s); $i < $len; $i += $bytes) {
                 [$bytes, $code] = $this->codeAt($s, $i, $len);
-                $out .= $this->turned[$code] ??= self::turn($this->codeText[$code] ?? $this->lookup($code));
+                $out .= $this->turned[$code] ?? $this->turnCode($code);
                 if ((++$n & 0xFFF) === 0 && isset($out[$this->maxText])) {
                     break;
                 }
@@ -162,13 +176,37 @@ final class Font
         foreach (isset($s[self::PIECE]) ? str_split($s, self::PIECE) : [$s] as $piece) {
             $codes = $this->codeBytes === 1 ? unpack('C*', $piece) : unpack('n*', strlen($piece) & 1 ? $piece . "\0" : $piece);
             foreach ($codes ?: [] as $code) {
-                $out .= $this->turned[$code] ??= self::turn($this->codeText[$code] ?? $this->lookup($code));
+                $out .= $this->turned[$code] ?? $this->turnCode($code);
             }
             if (isset($out[$this->maxText])) {
                 break;
             }
         }
         return $out;
+    }
+
+    private function turnCode(int $code): string
+    {
+        $text = self::turn($this->codeText[$code] ?? $this->lookup($code));
+        if (!$this->short) {
+            $this->turned[$code] = $text;
+        }
+        return $text;
+    }
+
+    /**
+     * As much of a long string, shown in a simple font, as decodes to no more than $maxText bytes.
+     * A character map can make one byte stand for hundreds, and a string can be megabytes of that byte.
+     */
+    private function within(string $s): string
+    {
+        $this->longest ??= max(1, ...array_values(array_map(strlen(...), $this->map)));
+        $most = intdiv($this->maxText, $this->longest);
+        if (strlen($s) <= $most) {
+            return $s;
+        }
+        $this->tooLong();
+        return substr($s, 0, $most);
     }
 
     /** The text of one glyph, last character first when it has several and they read right to left. */
@@ -321,10 +359,17 @@ final class Font
         if (!$this->rtl && $text >= "\xD6" && preg_match(Utf::RIGHT_TO_LEFT, $text)) {
             $this->rtl = true;
         }
-        if ($this->codeTextBytes > self::CACHE_BYTES) {
+        if ((++$this->lookups & 0xFF) === 0) {
+            $this->short = Memory::left() < self::LOW_MEMORY;
+        }
+        if ($this->short || $this->codeTextBytes > self::CACHE_BYTES) {
             $this->codeText = [];
             $this->turned = null;
+            $this->memo = [];
             $this->codeTextBytes = 0;
+            if ($this->short) {
+                return $text;
+            }
         }
         $this->codeTextBytes += strlen($text) + 64;
         return $this->codeText[$code] = $text;

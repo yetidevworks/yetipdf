@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace YetiPdf\Font;
 
 use YetiPdf\Core\File;
+use YetiPdf\Core\Memory;
 use YetiPdf\Core\PdfString;
 use YetiPdf\Core\Ref;
 use YetiPdf\Core\Stream;
@@ -77,6 +78,13 @@ final class FontLoader
 
     /** @var array<int|string, Font> */
     private array $cache = [];
+    /** Bytes the fonts in $cache took to read. Some keep a table for every glyph, so the count alone says little. */
+    private int $kept = 0;
+    /** Goes up each time the fonts kept here are let go, so that anything else holding on to them can let go too. */
+    public int $flushes = 0;
+    /** With less memory than this left, no more fonts are read. Text set in them is left out, which beats the process dying. */
+    public int $lowMemory = 16 << 20;
+    private ?Font $blank = null;
 
     public function __construct(private readonly File $file)
     {
@@ -88,6 +96,20 @@ final class FontLoader
         if (isset($this->cache[$key])) {
             return $this->cache[$key];
         }
+        $low = Memory::left() < $this->lowMemory;
+        if ($low || count($this->cache) >= self::CACHE_LIMIT || $this->kept > $this->file->limit()) {
+            $this->cache = [];
+            $this->kept = 0;
+            $this->flushes++;
+            if ($low) {
+                gc_mem_caches();
+                if (Memory::left() < $this->lowMemory) {
+                    $this->file->warn('There are more fonts than fit in the memory that is left; text set in the rest was left out');
+                    return $this->blank ??= self::blank();
+                }
+            }
+        }
+        $before = memory_get_usage();
         try {
             $dict = $this->file->dict($ref) ?? [];
             $font = ($dict['Subtype'] ?? null) === '/Type0' ? $this->composite($dict) : $this->simple($dict);
@@ -102,10 +124,17 @@ final class FontLoader
         }
         $font->maxText = intdiv($this->file->limit(), 4);
         $font->warn = $this->file->warn(...);
-        if (count($this->cache) >= self::CACHE_LIMIT) {
-            $this->cache = [];
-        }
+        $this->kept += max(0, memory_get_usage() - $before);
         return $this->cache[$key] = $font;
+    }
+
+    /** A font in which every code is no text at all. */
+    private static function blank(): Font
+    {
+        $font = new Font();
+        $font->map = self::strtrMap(array_fill(0, 256, ''));
+        $font->defaultWidth = 0.0;
+        return $font;
     }
 
     /** A name such as /Helvetica without its slash. Some writers store these as strings. */

@@ -28,8 +28,6 @@ final class Document
 
     private readonly FontLoader $fonts;
     private readonly Interpreter $interpreter;
-    /** @var list<string> */
-    private array $warnings = [];
 
     public function __construct(private readonly File $file, private readonly Options $options)
     {
@@ -52,7 +50,7 @@ final class Document
             try {
                 yield $number => $this->pageText($page, $resources);
             } catch (\Throwable $e) {
-                $this->warnings[] = "Page $number could not be read: " . $e->getMessage();
+                $this->file->warn("Page $number could not be read: " . $e->getMessage());
                 yield $number => '';
             }
         }
@@ -69,7 +67,7 @@ final class Document
             try {
                 return $this->pageText($page, $resources);
             } catch (\Throwable $e) {
-                $this->warnings[] = "Page $number could not be read: " . $e->getMessage();
+                $this->file->warn("Page $number could not be read: " . $e->getMessage());
                 return '';
             }
         }
@@ -134,7 +132,7 @@ final class Document
     /** @return list<string> */
     public function warnings(): array
     {
-        return array_values(array_unique(array_merge($this->file->warnings, $this->warnings)));
+        return $this->file->warnings;
     }
 
     /**

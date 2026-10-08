@@ -576,6 +576,83 @@ final class HardeningTest extends TestCase
         $this->assertSame('still here', YetiPdf::parse(PdfBuilder::build([$content]))->text());
     }
 
+    /** A page that uses $count composite fonts once each, every one with an embedded program whose table covers 65,535 glyphs. */
+    private static function pageOfFonts(int $count): string
+    {
+        $cmap = pack('nn', 0, 1) . pack('nnN', 3, 10, 12) . pack('nnNNN', 12, 0, 28, 0, 1) . pack('NNN', 0x4E00, 0x4E00 + 65534, 1);
+        $program = "\0\1\0\0" . pack('nnnn', 1, 16, 0, 0) . 'cmap' . pack('NNN', 0, 28, strlen($cmap)) . $cmap;
+        $objects = [
+            1 => '<< /Type /Catalog /Pages 2 0 R >>',
+            2 => '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            5 => PdfBuilder::stream($program, true, '/Length1 ' . strlen($program)),
+        ];
+        $names = '';
+        $content = 'BT 72 720 Td ';
+        for ($i = 0; $i < $count; $i++) {
+            $at = 10 + 3 * $i;
+            $objects[$at] = "<< /Type /Font /Subtype /Type0 /BaseFont /S$i /Encoding /Identity-H /DescendantFonts [" . ($at + 1) . ' 0 R] >>';
+            $objects[$at + 1] = "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /S$i /DW 500 /CIDToGIDMap /Identity /FontDescriptor " . ($at + 2) . ' 0 R >>';
+            $objects[$at + 2] = "<< /Type /FontDescriptor /FontName /S$i /Flags 4 /FontFile2 5 0 R >>";
+            $names .= "/F$i $at 0 R ";
+            $content .= "/F$i 10 Tf <0001> Tj ";
+        }
+        $objects[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << $names >> >> /Contents 4 0 R >>";
+        $objects[4] = PdfBuilder::stream($content . 'ET');
+        // No cross-reference table: the reader finds the objects by scanning, which is not what is being tested.
+        $pdf = "%PDF-1.7\n";
+        foreach ($objects as $number => $body) {
+            $pdf .= "$number 0 obj\n$body\nendobj\n";
+        }
+        return $pdf . "trailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    }
+
+    public function testFontsAreLetGoByWhatTheyHoldAndReadAgainWhenNeeded(): void
+    {
+        // Each font keeps about 200KB. With 2MB to work in, the half megabyte for fonts is spent after three of
+        // them, so by the end of the page most have been let go and the text must still be all there.
+        $file = new File(self::pageOfFonts(40), '', 2 << 20);
+        $loader = new FontLoader($file);
+        $interpreter = new Interpreter($file, $loader);
+        $page = $file->dict(new Ref(3));
+
+        $text = $interpreter->page($file->streamData($file->resolve($page['Contents'])) ?? '', $file->dict($page['Resources']) ?? []);
+
+        $this->assertSame(str_repeat(Utf::chr(0x4E00), 40), $text);
+        $this->assertGreaterThan(5, $loader->flushes);
+    }
+
+    public function testWithNoMemoryLeftForFontsTheirTextIsLeftOutAndSaidSo(): void
+    {
+        $file = new File(self::pageOfFonts(3));
+        $loader = new FontLoader($file);
+        $loader->lowMemory = PHP_INT_MAX;
+        $interpreter = new Interpreter($file, $loader);
+        $page = $file->dict(new Ref(3));
+
+        $text = $interpreter->page($file->streamData($file->resolve($page['Contents'])) ?? '', $file->dict($page['Resources']) ?? []);
+
+        $this->assertSame('', $text);
+        $this->assertCount(1, array_filter($file->warnings, static fn(string $w): bool => str_contains($w, 'more fonts than fit')));
+    }
+
+    public function testALongStringInAFontWhereOneByteIsALotOfTextIsCutShort(): void
+    {
+        // One byte stands for 120 characters, and the string is 100,000 of that byte.
+        $cmap = "1 begincodespacerange <00> <FF> endcodespacerange\n1 beginbfchar <41> <" . str_repeat('0058', 120) . "> endbfchar";
+        $pdf = PdfBuilder::build(
+            ['BT /F1 10 Tf 72 720 Td (' . str_repeat('A', 100000) . ') Tj ET'],
+            ['F1' => '/Subtype /TrueType /BaseFont /X /ToUnicode 100 0 R'],
+            [100 => PdfBuilder::stream($cmap)]
+        );
+        $doc = new Document(new File($pdf, '', 4 << 20), new Options());
+        $text = $doc->text();
+
+        $this->assertStringStartsWith('XXXX', $text);
+        // A quarter of the 1MB a stream may be here.
+        $this->assertLessThanOrEqual(262144, strlen($text));
+        $this->assertCount(1, self::notes($doc, 'turns into more text'));
+    }
+
     public function testASectionOfACharacterMapPastAMegabyteIsRead(): void
     {
         // 80,000 lines in one section. A pattern used to pick the section out, and gave up without a word at this size.
@@ -591,5 +668,18 @@ final class HardeningTest extends TestCase
         $this->assertSame(Utf::chr(0x4E00 + 79999 % 20000), $cmap->get(79999));
         $this->assertSame('C', $cmap->get(0x100002));
         $this->assertSame('b', $cmap->get(0x100011));
+    }
+
+    public function testNotesAboutPagesThatCannotBeReadStopAtTheSameLimitAsTheRest(): void
+    {
+        $file = new File(PdfBuilder::build(['BT /F1 12 Tf (fine) Tj ET']));
+        for ($i = 0; $i < 500; $i++) {
+            $file->warn("Page $i could not be read: for a reason of its own");
+        }
+        $doc = new Document($file, new Options());
+
+        $this->assertSame('fine', $doc->text());
+        $this->assertCount(101, $doc->warnings());
+        $this->assertSame('More problems were found than are listed here', $doc->warnings()[100]);
     }
 }

@@ -280,6 +280,7 @@ final class Interpreter
 
         $fontDict = null;
         $fontCache = [];
+        $flushes = $this->fonts->flushes;
         $stack = [];
         $array = null;
         $saved = [];
@@ -439,10 +440,12 @@ final class Interpreter
                     if ($n >= 2 && is_string($stack[$n - 2])) {
                         $name = substr($stack[$n - 2], 1);
                         $this->size = self::last($stack[$n - 1]);
+                        if ($flushes !== $this->fonts->flushes || isset($fontCache[255])) {
+                            // The loader has let its fonts go to free memory, or this content names a great many.
+                            $fontCache = [];
+                            $flushes = $this->fonts->flushes;
+                        }
                         if (!array_key_exists($name, $fontCache)) {
-                            if (count($fontCache) >= 256) {
-                                $fontCache = [];
-                            }
                             $fontDict ??= $this->file->dict($resources['Font'] ?? null) ?? [];
                             $fontCache[$name] = isset($fontDict[$name]) ? $this->fonts->load($fontDict[$name]) : null;
                         }

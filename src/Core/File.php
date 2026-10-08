@@ -19,8 +19,11 @@ final class File
     private const CACHE_LIMIT = 1024;
     /** Decoded object streams kept at once; the oldest is dropped to make room. */
     private const OBJSTM_LIMIT = 32;
-    /** Smallest and largest size a decoded stream may reach when the limit comes from the memory that is left. */
-    private const MIN_DECODED = 16 << 20;
+    /**
+     * Smallest and largest size a decoded stream may reach when the limit comes from the memory that is left.
+     * The smallest is low on purpose: with 20MB left, a promise of 16MB is the thing that would run out.
+     */
+    private const MIN_DECODED = 4 << 20;
     private const MAX_DECODED = 512 << 20;
     /** Warnings kept; a file full of broken parts would otherwise fill memory with notes about them. */
     private const WARNING_LIMIT = 100;
