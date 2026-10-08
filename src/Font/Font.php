@@ -198,7 +198,7 @@ final class Font
      */
     private function within(string $s): string
     {
-        $this->longest ??= max(1, ...array_values(array_map(strlen(...), $this->map)));
+        $this->longest ??= max([1, ...array_values(array_map(strlen(...), $this->map))]);
         $most = intdiv($this->maxText, $this->longest);
         if (strlen($s) <= $most) {
             return $s;
@@ -328,6 +328,16 @@ final class Font
         }
     }
 
+    /** The width the font gives for a code, or nothing when it gives none and the default would apply. */
+    private function statedWidth(int $code): float
+    {
+        if (isset($this->widths[$code])) {
+            return $this->widths[$code];
+        }
+        $range = $this->widthIndex?->find($code);
+        return $range === null ? 0.0 : $this->rangeWidths[$range];
+    }
+
     private function rangeWidth(int $code): float
     {
         if (isset($this->widthCache[$code])) {
@@ -346,7 +356,7 @@ final class Font
         if ($text === null) {
             if ($this->codesAreUnicode) {
                 $text = ($code >= 0xD800 && $code <= 0xDFFF) ? '' : Utf::chr($code);
-            } elseif (!$this->unmapped && ($this->widths[$code] ?? 0.0) * $this->scale >= self::GAP_WIDTH) {
+            } elseif (!$this->unmapped && $this->statedWidth($code) * $this->scale >= self::GAP_WIDTH) {
                 $text = self::GAP;
                 $this->gaps = true;
             } else {
