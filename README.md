@@ -29,12 +29,12 @@ Memory matters just as much if you're running on a 256MB host:
 
 | Document | YetiPDF | pdftotext | PrinsFrank | smalot |
 |---|---|---|---|---|
-| PostgreSQL 16 manual | 53MB | 72MB | 48MB | 430MB |
+| PostgreSQL 16 manual | 39MB | 72MB | 48MB | 430MB |
 | NIST SP 800-53 | 18MB | 71MB | 71MB | 193MB |
 | IRS Publication 17 | 20MB | 29MB | 82MB | 193MB |
 | Pro Git | 26MB | 17MB | 27MB | 779MB |
 
-Those figures are for pulling the whole document into one string. Read it a page at a time, as in the example below, and the PostgreSQL manual peaks at 39MB.
+Those figures are for pulling the whole document into one string. Read it a page at a time, as in the example below, and the PostgreSQL manual peaks at 25MB.
 
 ## How accurate?
 
