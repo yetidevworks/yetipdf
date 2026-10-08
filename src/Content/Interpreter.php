@@ -72,6 +72,13 @@ final class Interpreter
         '-' => true, '.' => true, '+' => true,
     ];
 
+    /** Content larger than this is checked against the memory that is left before it is tokenized. */
+    private const GUARDED_SIZE = 1 << 20;
+    /** Bytes for each token the tokenizer keeps: the string itself and its slot in the result array. */
+    private const TOKEN_COST = 64;
+    /** Bytes that begin a token the tokenizer keeps: ( < / [ ] T q Q ' " */
+    private const TOKEN_STARTS = [40, 60, 47, 91, 93, 84, 113, 81, 39, 34];
+
     private static ?string $tokenPattern = null;
 
     private string $out = '';
@@ -218,8 +225,17 @@ final class Interpreter
             $content = preg_replace('/(?<![A-Za-z0-9])BI[\s\/](?:.*?\sID\s.*?(?:\sEI(?![A-Za-z0-9])|$)|.*+(*SKIP)(*F))/s', ' ', $content) ?? $content;
         }
 
+        if (strlen($content) > self::GUARDED_SIZE && !$this->fits($content)) {
+            $this->file->warn('Page content is too dense to read in the memory that is left; it was skipped');
+            return;
+        }
+
         self::$tokenPattern ??= self::buildTokenPattern();
-        if (!preg_match_all(self::$tokenPattern, $content, $m)) {
+        $found = preg_match_all(self::$tokenPattern, $content, $m);
+        if ($found === false) {
+            $this->file->warn('Page content could not be read (' . preg_last_error_msg() . '); it was skipped');
+        }
+        if (!$found) {
             return;
         }
         unset($content);
@@ -438,6 +454,25 @@ final class Interpreter
             }
             $stack = [];
         }
+    }
+
+    /**
+     * Whether the tokens of this content would fit in the memory that is left.
+     *
+     * The tokenizer makes a PHP string for every token it keeps, about 50 bytes each. The tokens it keeps start
+     * with a few characters, so counting those gives an upper bound without building anything. Path and colour
+     * operators are not among them, which is why a page of dense drawing is not turned away.
+     */
+    private function fits(string $content): bool
+    {
+        $counts = count_chars($content, 1);
+        $tokens = substr_count($content, 'cm') + substr_count($content, 'Do') + substr_count($content, 'BT');
+        foreach (self::TOKEN_STARTS as $byte) {
+            $tokens += $counts[$byte] ?? 0;
+        }
+        // Most T operators have numbers in front of them, and those are kept as a token of their own.
+        $tokens += $counts[84] ?? 0;
+        return $tokens * self::TOKEN_COST <= $this->file->room();
     }
 
     private function nextLine(): void
@@ -869,6 +904,17 @@ final class Interpreter
      */
     private static function numbers(string $run): array
     {
+        if (isset($run[4096])) {
+            // A very long run: walk it rather than build a second array holding every number as a string.
+            $out = [];
+            for ($p = 0, $len = strlen($run); $p < $len; $p += $n + 1) {
+                $n = strcspn($run, " \n\r\t", $p);
+                if ($n > 0) {
+                    $out[] = (float)substr($run, $p, $n);
+                }
+            }
+            return $out;
+        }
         $parts = explode(' ', $run);
         if (strpbrk($run, "\n\r\t") !== false || str_contains($run, '  ')) {
             $parts = preg_split('/\s+/', $run, -1, PREG_SPLIT_NO_EMPTY) ?: [];
@@ -887,7 +933,17 @@ final class Interpreter
      */
     private static function operands(mixed $run): array
     {
-        return is_string($run) ? self::numbers($run) : [];
+        return is_string($run) ? self::numbers(self::tail($run)) : [];
+    }
+
+    /** The end of a run of numbers. Operators read at most six, and a run can be megabytes long. */
+    private static function tail(string $run): string
+    {
+        if (!isset($run[1024])) {
+            return $run;
+        }
+        $run = substr($run, -1024);
+        return substr($run, strcspn($run, " \n\r\t") + 1);
     }
 
     /** The last number in a token. */
@@ -899,7 +955,7 @@ final class Interpreter
         if (strpbrk($run, " \n\r\t") === false) {
             return (float)$run;
         }
-        $numbers = self::numbers($run);
+        $numbers = self::numbers(self::tail($run));
         return $numbers === [] ? 0.0 : $numbers[count($numbers) - 1];
     }
 

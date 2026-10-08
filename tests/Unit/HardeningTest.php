@@ -10,6 +10,7 @@ use YetiPdf\Document;
 use YetiPdf\Filter\Filters;
 use YetiPdf\Options;
 use YetiPdf\Tests\PdfBuilder;
+use YetiPdf\YetiPdf;
 
 /** Small files that ask for far more memory or time than they are worth must cost a bounded amount and lose only their own part. */
 final class HardeningTest extends TestCase
@@ -154,5 +155,38 @@ final class HardeningTest extends TestCase
 
         $doc->text();
         $this->assertNotEmpty(self::notes($doc, 'rest of it was left out'));
+    }
+
+    public function testContentTooDenseForTheMemoryLeftIsSkipped(): void
+    {
+        $content = 'BT /F1 12 Tf 72 720 Td ' . str_repeat('()Tj ', 230000) . '(late) Tj ET';
+        $pdf = PdfBuilder::build([$content]);
+
+        $tight = new Document(new File($pdf, '', 8 << 20), new Options());
+        $this->assertSame('', $tight->text());
+        $this->assertCount(1, self::notes($tight, 'too dense'));
+
+        $roomy = new Document(new File($pdf, '', 1 << 30), new Options());
+        $this->assertSame('late', $roomy->text());
+        $this->assertSame([], $roomy->warnings());
+    }
+
+    public function testDenseDrawingThatTheTokenizerSkipsIsStillRead(): void
+    {
+        $content = str_repeat("100.5 200.25 m 300.5 400.75 l 12.5 13.5 14.5 15.5 16.5 17.5 c S\n", 20000) . 'BT /F1 12 Tf 72 720 Td (vector page) Tj ET';
+        $this->assertGreaterThan(1 << 20, strlen($content));
+        $doc = new Document(new File(PdfBuilder::build([$content]), '', 8 << 20), new Options());
+
+        $this->assertSame('vector page', $doc->text());
+        $this->assertSame([], $doc->warnings());
+    }
+
+    public function testLongRunsOfNumbersInFrontOfAnOperatorAreHandledByTheirTail(): void
+    {
+        $plain = YetiPdf::parse(PdfBuilder::build(['BT /F1 12 Tf 72 700 Td (a) Tj 0 -50 Td (b) Tj ET']))->text();
+        $long = YetiPdf::parse(PdfBuilder::build(['BT /F1 12 Tf ' . str_repeat('7 ', 60000) . '72 700 Td (a) Tj ' . str_repeat('7 ', 60000) . '0 -50 Td (b) Tj ET']))->text();
+
+        $this->assertSame("a\nb", $plain);
+        $this->assertSame($plain, $long);
     }
 }
