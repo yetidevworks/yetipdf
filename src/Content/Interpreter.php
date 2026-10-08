@@ -27,6 +27,10 @@ final class Interpreter
     private const MAX_FORM_DEPTH = 12;
     /** How many held lines back a new piece is compared with, to find the line it carries on from. */
     private const MAX_LINES_BACK = 400;
+    /** Pieces of right-to-left lines kept per page. A real page has a few thousand; past this, text goes out in the order it is drawn. */
+    private const MAX_HELD = 50000;
+    /** Pieces in one line past which the letter-level tidying in place() is skipped, to keep its cost in step with the line's size. */
+    private const MAX_TIDIED = 2000;
 
     /** Gap, as a fraction of the font size, that separates two words. */
     public float $wordGap = 0.11;
@@ -102,6 +106,7 @@ final class Interpreter
      * @var list<array{0: float, 1: float, 2: float, 3: float, 4: float, 5: list<array{0: float, 1: float, 2: string, 3: float}>}>
      */
     private array $lines = [];
+    private int $heldCount = 0;
 
     // Current transformation matrix.
     private float $a = 1.0;
@@ -149,6 +154,7 @@ final class Interpreter
         $this->lineAt = 0;
         $this->held = null;
         $this->lines = [];
+        $this->heldCount = 0;
         $this->a = $this->d = 1.0;
         $this->b = $this->c = $this->e = $this->f = 0.0;
         $this->font = null;
@@ -579,11 +585,11 @@ final class Interpreter
             $ref = $size > $this->psize ? $size : $this->psize;
             $same = abs($dy * $this->pux - $dx * $this->puy) <= $this->lineGap * $ref && ($ux * $this->pux + $uy * $this->puy) >= 0.9;
         }
-        if ($this->held !== null && !$same) {
+        if ($this->held !== null && (!$same || $this->heldCount >= self::MAX_HELD)) {
             $this->release();
         }
         if ($this->held === null) {
-            if (!preg_match(Utf::RIGHT_TO_LEFT, $text)) {
+            if ($this->heldCount >= self::MAX_HELD || !preg_match(Utf::RIGHT_TO_LEFT, $text)) {
                 return false;
             }
             $this->held = [];
@@ -606,6 +612,7 @@ final class Interpreter
             $this->accentAt = -1;
         }
 
+        $this->heldCount++;
         $start = $x * $ux + $y * $uy;
         if ($width < 0.0) {
             // Negative letter spacing makes a string run backwards across the page (one way of writing right to left).
@@ -671,6 +678,7 @@ final class Interpreter
             // Left to right along the line. A vowel mark has no width and sits on its letter, so it sorts after it.
             usort($pieces, static fn(array $a, array $b): int => [$a[0], $b[1] - $b[0]] <=> [$b[0], $a[1] - $a[0]]);
 
+            $tidy = count($pieces) <= self::MAX_TIDIED;
             $visual = '';
             $end = 0.0;
             $before = null;
@@ -683,13 +691,17 @@ final class Interpreter
                     }
                     if ($start - $end > $this->wordGap * $size && $part[0] !== ' ' && !str_ends_with($visual, ' ')) {
                         $visual .= ' ';
-                    } elseif ($end - $start > 0.2 * $size && $stop > $start) {
+                    } elseif ($tidy && $end - $start > 0.2 * $size && $stop > $start) {
                         $part = self::withoutOverlap($visual, $part, ($end - $start) / ($stop - $start));
                     }
                 }
-                if ($stop - $start < 0.01 * $size && $visual !== '' && preg_match('/^\p{Mn}+$/u', $part) && preg_match('/[^\x80-\xBF][\x80-\xBF]*$/', $visual, $last)) {
+                if ($tidy && $stop - $start < 0.01 * $size && $visual !== '' && preg_match('/^\p{Mn}+$/u', $part)) {
                     // A mark drawn on its own: put it in front of its letter, so that it follows the letter once the line is turned around.
-                    $visual = substr($visual, 0, -strlen($last[0])) . $part . $last[0];
+                    $at = strlen($visual) - 1;
+                    while ($at > 0 && (ord($visual[$at]) & 0xC0) === 0x80) {
+                        $at--;
+                    }
+                    $visual = substr($visual, 0, $at) . $part . substr($visual, $at);
                 } else {
                     $visual .= $part;
                 }
