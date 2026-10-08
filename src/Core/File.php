@@ -16,9 +16,17 @@ use YetiPdf\Filter\Filters;
  */
 final class File
 {
-    private const CACHE_LIMIT = 4096;
+    private const CACHE_LIMIT = 1024;
+    /** Decoded object streams kept at once; the oldest is dropped to make room. */
+    private const OBJSTM_LIMIT = 32;
 
-    /** @var array<int, array{0: int, 1: int, 2: int}> object number => [type, offset | container, generation | index] */
+    /**
+     * Object number => where to find it, packed into one integer because a large PDF has tens of
+     * thousands of these: (file offset << 1) for an object in the file itself, or
+     * (container object number << 1 | 1) for one stored inside an object stream.
+     *
+     * @var array<int, int>
+     */
     private array $xref = [];
     /** @var array<string, mixed> */
     private array $trailer = [];
@@ -116,15 +124,15 @@ final class File
             return null;
         }
 
-        if ($entry[0] === 1) {
-            $parsed = Lexer::indirect($this->data, $entry[1]);
+        if (($entry & 1) === 0) {
+            $parsed = Lexer::indirect($this->data, $entry >> 1);
             if (($parsed === null || $parsed[0] !== $num) && !$this->rebuilt) {
                 $this->rebuild();
                 return $this->get($num);
             }
             $value = $parsed === null ? null : $parsed[2];
         } else {
-            $value = $this->fromObjectStream($entry[1], $num);
+            $value = $this->fromObjectStream($entry >> 1, $num);
         }
 
         if (count($this->cache) >= self::CACHE_LIMIT) {
@@ -190,6 +198,9 @@ final class File
     private function fromObjectStream(int $container, int $num): mixed
     {
         if (!isset($this->objStreams[$container])) {
+            if (count($this->objStreams) >= self::OBJSTM_LIMIT) {
+                unset($this->objStreams[array_key_first($this->objStreams)]);
+            }
             $this->objStreams[$container] = $this->loadObjectStream($container);
         }
         [$data, $offsets] = $this->objStreams[$container];
@@ -204,10 +215,10 @@ final class File
     private function loadObjectStream(int $container): array
     {
         $entry = $this->xref[$container] ?? null;
-        if ($entry === null || $entry[0] !== 1) {
+        if ($entry === null || ($entry & 1) !== 0) {
             return ['', []];
         }
-        $parsed = Lexer::indirect($this->data, $entry[1]);
+        $parsed = Lexer::indirect($this->data, $entry >> 1);
         $stream = $parsed[2] ?? null;
         if (!$stream instanceof Stream) {
             return ['', []];
@@ -259,7 +270,7 @@ final class File
                             break;
                         }
                         if ($row[3] === 'n' && !isset($this->xref[$num + $i])) {
-                            $this->xref[$num + $i] = [1, (int)$row[1], (int)$row[2]];
+                            $this->xref[$num + $i] = (int)$row[1] << 1;
                         }
                         $consumed += strlen($row[0]);
                     }
@@ -318,7 +329,7 @@ final class File
                 if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
                     continue;
                 }
-                $this->xref[$num + $i] = [$type, self::beInt($data, $pos + $w0, $w1), self::beInt($data, $pos + $w0 + $w1, $w2)];
+                $this->xref[$num + $i] = self::beInt($data, $pos + $w0, $w1) << 1 | ($type - 1);
             }
         }
     }
@@ -328,13 +339,13 @@ final class File
     {
         foreach ($this->containers as $container) {
             try {
-                [, $offsets] = $this->objStreams[$container] = $this->loadObjectStream($container);
+                [, $offsets] = $this->loadObjectStream($container);
             } catch (\Throwable) {
                 continue;
             }
             foreach ($offsets as $num => $_) {
                 if (!isset($this->xref[$num])) {
-                    $this->xref[$num] = [2, $container, 0];
+                    $this->xref[$num] = $container << 1 | 1;
                 }
             }
         }
@@ -363,7 +374,7 @@ final class File
                 $xref[(int)$hit[1][0]] = [1, $hit[0][1], (int)$hit[2][0]];
             }
         }
-        $this->xref = $xref;
+        $this->xref = array_map(static fn(array $e): int => $e[1] << 1, $xref);
         $this->cache = [];
         $this->objStreams = [];
 

@@ -13,7 +13,7 @@ namespace YetiPdf\Font;
  */
 final class Font
 {
-    private const MEMO_LIMIT = 20000;
+    private const MEMO_LIMIT = 1000;
 
     /** Single-byte codes (Type1, TrueType, Type3) or multi-byte (Type0). */
     public bool $simple = true;
