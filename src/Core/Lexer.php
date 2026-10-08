@@ -17,6 +17,13 @@ final class Lexer
     private const DELIM = "\0\t\n\f\r ()<>[]{}/%";
     private const MAX_DEPTH = 100;
 
+    /**
+     * How many array elements and dictionary entries one parse may build. A tiny compressed stream can
+     * ask for millions of them; File sets this to what the memory left can hold before each parse, and a
+     * parse that runs out stops early. PHP_INT_MAX means no cap, for callers that have their own.
+     */
+    public static int $room = PHP_INT_MAX;
+
     public static function skip(string $d, int &$p): void
     {
         $len = strlen($d);
@@ -121,6 +128,11 @@ final class Lexer
                     $p++;
                     break;
                 }
+                // Out of budget: stop here and leave $p where it is. An array this long is not real, and
+                // scanning on to its close would cost the same again for every parse that reaches this point.
+                if (self::$room-- <= 0) {
+                    break;
+                }
                 $before = $p;
                 $list[] = self::value($d, $p, $depth + 1);
                 if ($p === $before) {
@@ -180,6 +192,10 @@ final class Lexer
             $p += $n + 1;
             if (str_contains($key, '#')) {
                 $key = substr(self::unescapeName('/' . $key), 1);
+            }
+            // Out of budget: leave the rest of this dictionary unread rather than build millions of entries.
+            if (self::$room-- <= 0) {
+                break;
             }
             $dict[$key] = self::value($d, $p, $depth + 1);
         }

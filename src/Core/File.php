@@ -111,17 +111,21 @@ final class File
         return $this->crypt !== null;
     }
 
-    /** Adds a note to $warnings unless it is already there. */
-    public function warn(string $message): void
+    /**
+     * Adds a note to $warnings unless it is already there. $key decides what counts as the same note: by
+     * default the message itself, so a note whose text varies (a changing size, say) can still be kept once.
+     */
+    public function warn(string $message, ?string $key = null): void
     {
+        $key ??= $message;
         $count = count($this->noted);
-        if (isset($this->noted[$message]) || $count > self::WARNING_LIMIT) {
+        if (isset($this->noted[$key]) || $count > self::WARNING_LIMIT) {
             return;
         }
         if ($count === self::WARNING_LIMIT) {
             $message = 'More problems were found than are listed here';
         }
-        $this->noted[$message] = true;
+        $this->noted[$key] = true;
         $this->warnings[] = $message;
     }
 
@@ -165,6 +169,33 @@ final class File
         return is_array($v) ? $v : null;
     }
 
+    /** How many capped() calls are on the stack; the outermost owns the budget. */
+    private int $parsing = 0;
+
+    /**
+     * Parses within a budget on how many array elements and dictionary entries may be built, so a small
+     * file cannot expand into millions of them. Budgets nest: only the outermost sets and clears the cap,
+     * so the whole of one object is counted together. The depth is counted rather than read from the cap
+     * itself, because an uncapped parse decrements the cap too and must not be mistaken for an open budget.
+     */
+    private function capped(\Closure $parse): mixed
+    {
+        if ($this->parsing === 0) {
+            Lexer::$room = max(4096, intdiv($this->room(), 512));
+        }
+        $this->parsing++;
+        try {
+            return $parse();
+        } finally {
+            if (--$this->parsing === 0) {
+                if (Lexer::$room <= 0) {
+                    $this->warn('An object has more parts than fit in the memory that is left; the rest were left out');
+                }
+                Lexer::$room = PHP_INT_MAX;
+            }
+        }
+    }
+
     public function get(int $num): mixed
     {
         if (array_key_exists($num, $this->cache)) {
@@ -176,14 +207,14 @@ final class File
         }
 
         if (($entry & 1) === 0) {
-            $parsed = Lexer::indirect($this->data, $entry >> 1);
+            $parsed = $this->capped(fn() => Lexer::indirect($this->data, $entry >> 1));
             if (($parsed === null || $parsed[0] !== $num) && !$this->rebuilt) {
                 $this->rebuild();
                 return $this->get($num);
             }
             $value = $parsed === null ? null : $parsed[2];
         } else {
-            $value = $this->fromObjectStream($entry >> 1, $num);
+            $value = $this->capped(fn() => $this->fromObjectStream($entry >> 1, $num));
         }
 
         if (count($this->cache) >= self::CACHE_LIMIT) {
@@ -203,7 +234,8 @@ final class File
         $cut = false;
         $data = $this->decode($s, $decrypt, $limit, $cut);
         if ($cut) {
-            $this->warn(sprintf('Stream %d is too large to unpack in the memory that is left (limit %s); the rest of it was left out', $s->num, self::size($limit)));
+            // Keyed by the stream, so reading the same one again under a smaller limit does not add a second note.
+            $this->warn(sprintf('Stream %d is too large to unpack in the memory that is left (limit %s); the rest of it was left out', $s->num, self::size($limit)), "stream-too-large-$s->num");
         }
         return $data;
     }
@@ -303,7 +335,7 @@ final class File
             return null;
         }
         $p = $offsets[$num];
-        return Lexer::value($data, $p);
+        return $this->capped(fn() => Lexer::value($data, $p));
     }
 
     /** @return array{0: string, 1: array<int, int>} */
@@ -384,32 +416,42 @@ final class File
                     $p += strlen($h[0]);
                     $num = (int)$h[1];
                     $count = (int)$h[2];
-                    $chunk = substr($d, $p, $count * 21 + 64);
-                    $allowance -= strlen($chunk);
+                    // A real subsection of this many rows takes 20 bytes each. A header that claims far more
+                    // than the file could hold is not telling the truth, and is given up on before any are read.
+                    $allowance -= min($count, $total + 1) * 21;
                     if ($allowance < 0) {
                         throw new \RuntimeException('Cross-reference table is larger than the file');
                     }
-                    preg_match_all('/\G\s*(\d{1,10})\s+(\d{1,5})\s+([nf])/', $chunk, $rows, PREG_SET_ORDER);
-                    $consumed = 0;
-                    foreach ($rows as $i => $row) {
-                        if ($i >= $count) {
+                    // Read the rows a window at a time, so even an honest count never becomes one huge match array.
+                    for ($i = 0; $i < $count; ) {
+                        if (!preg_match_all('/\G\s*(\d{1,10})\s+(\d{1,5})\s+([nf])/', substr($d, $p, 65536), $rows, PREG_SET_ORDER)) {
                             break;
                         }
-                        if ($row[3] === 'n' && !isset($this->xref[$num + $i])) {
-                            $this->xref[$num + $i] = (int)$row[1] << 1;
+                        $consumed = 0;
+                        foreach ($rows as $row) {
+                            if ($i >= $count) {
+                                break;
+                            }
+                            if ($row[3] === 'n' && !isset($this->xref[$num + $i])) {
+                                $this->xref[$num + $i] = (int)$row[1] << 1;
+                            }
+                            $consumed += strlen($row[0]);
+                            $i++;
                         }
-                        $consumed += strlen($row[0]);
+                        if ($consumed === 0) {
+                            break;
+                        }
+                        $p += $consumed;
                     }
-                    $p += $consumed;
                 }
                 $t = strpos($d, 'trailer', $p);
                 if ($t === false || $t - $p > 4096) {
                     continue;
                 }
                 $t += 7;
-                $dict = Lexer::value($d, $t);
+                $dict = $this->capped(fn() => Lexer::value($d, $t));
             } else {
-                $parsed = Lexer::indirect($d, $pos);
+                $parsed = $this->capped(fn() => Lexer::indirect($d, $pos));
                 $stream = $parsed[2] ?? null;
                 if (!$stream instanceof Stream) {
                     continue;
@@ -524,7 +566,7 @@ final class File
             if (!$isObjStm && !$isXref) {
                 continue;
             }
-            $parsed = Lexer::indirect($d, $offset);
+            $parsed = $this->capped(fn() => Lexer::indirect($d, $offset));
             $stream = $parsed[2] ?? null;
             if (!$stream instanceof Stream) {
                 continue;
@@ -540,17 +582,24 @@ final class File
         $offset = 0;
         while (($t = strpos($d, 'trailer', $offset)) !== false) {
             $p = $t + 7;
-            $dict = Lexer::value($d, $p);
+            Lexer::skip($d, $p);
+            // A trailer is a dictionary. The word on its own, or in front of anything else, means nothing, and
+            // parsing from there would read to the end of the file. Carry on from past whatever this was.
+            if (substr_compare($d, '<<', $p, 2) !== 0) {
+                $offset = $t + 7;
+                continue;
+            }
+            $dict = $this->capped(fn() => Lexer::value($d, $p));
             if (is_array($dict)) {
                 $trailer = $dict + $trailer;
             }
-            $offset = $t + 7;
+            $offset = max($p, $t + 7);
         }
 
         if (!isset($trailer['Root'])) {
             foreach ($xref as $num => $offset) {
                 if (preg_match('/\/Type\s*\/Catalog\b/', substr($d, $offset, 2048))) {
-                    $parsed = Lexer::indirect($d, $offset);
+                    $parsed = $this->capped(fn() => Lexer::indirect($d, $offset));
                     if (is_array($parsed[2] ?? null) && ($parsed[2]['Type'] ?? null) === '/Catalog') {
                         $trailer['Root'] = new Ref($num, $parsed[1]);
                     }

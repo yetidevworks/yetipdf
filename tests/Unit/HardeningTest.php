@@ -682,4 +682,101 @@ final class HardeningTest extends TestCase
         $this->assertCount(101, $doc->warnings());
         $this->assertSame('More problems were found than are listed here', $doc->warnings()[100]);
     }
+
+    public function testAnArrayWithFarMoreEntriesThanTheMemoryAllowsIsReadOnlyAsFarAsItFits(): void
+    {
+        // Four megabytes of room allows about 8,000 array elements, far short of the 60,000 asked for.
+        $pdf = PdfBuilder::build(['BT /F1 12 Tf (hi) Tj ET'], [], [103 => '[' . str_repeat('1 0 R ', 60000) . ']']);
+        $file = new File($pdf, '', 4 << 20);
+        $array = $file->get(103);
+
+        $this->assertIsArray($array);
+        $this->assertGreaterThan(0, count($array));
+        $this->assertLessThan(60000, count($array));
+        $this->assertNotEmpty(array_filter($file->warnings, static fn(string $w): bool => str_contains($w, 'more parts than fit')));
+    }
+
+    public function testADictionaryWithFarMoreKeysThanTheMemoryAllowsIsReadOnlyAsFarAsItFits(): void
+    {
+        $keys = '<<';
+        for ($i = 0; $i < 60000; $i++) {
+            $keys .= " /K$i $i";
+        }
+        $pdf = PdfBuilder::build(['BT /F1 12 Tf (hi) Tj ET'], [], [103 => $keys . ' >>']);
+        $file = new File($pdf, '', 4 << 20);
+        $dict = $file->get(103);
+
+        $this->assertIsArray($dict);
+        $this->assertGreaterThan(0, count($dict));
+        $this->assertLessThan(60000, count($dict));
+    }
+
+    public function testAnArrayThatFitsIsReadInFull(): void
+    {
+        $pdf = PdfBuilder::build(['BT /F1 12 Tf (hi) Tj ET'], [], [103 => '[' . str_repeat('1 0 R ', 2000) . ']']);
+        $file = new File($pdf, '', 4 << 20);
+
+        $this->assertCount(2000, $file->get(103));
+        $this->assertSame([], $file->warnings);
+    }
+
+    public function testAClassicCrossReferenceSectionClaimingFarMoreRowsThanTheFileIsGivenUpOn(): void
+    {
+        $pad = str_repeat("%% a comment line that pads the file out to a few kilobytes so the claim is plainly false\n", 200);
+        $head = "%PDF-1.4\n$pad" . "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n";
+        $at = strlen($head);
+        $pdf = $head . "xref\n0 5000000\n" . str_repeat("0000000000 65535 f \n", 3) . "trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n$at\n%%EOF\n";
+        $doc = YetiPdf::parse($pdf);
+
+        $this->assertSame('', $doc->text());
+        $this->assertContains('Cross-reference table was missing or damaged; rebuilt by scanning the file', $doc->warnings());
+    }
+
+    public function testAFileFullOfTrailerWordsIsRebuiltWithoutReparsingEachToTheEnd(): void
+    {
+        $pdf = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+            . "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+            . "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 9 0 R >> >> >>\nendobj\n"
+            . "9 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+            . "4 0 obj\n<< /Length 24 >>\nstream\nBT /F1 12 Tf (hi) Tj ET\nendstream\nendobj\n"
+            . str_repeat('trailer [ ', 20000) . "trailer << /Root 1 0 R >>\n";
+
+        $start = microtime(true);
+        $doc = YetiPdf::parse($pdf);
+        $text = $doc->text();
+        $elapsed = microtime(true) - $start;
+
+        $this->assertStringContainsString('hi', $text);
+        $this->assertLessThan(5.0, $elapsed, 'the rescan reparsed each trailer word to the end of the file');
+    }
+
+    public function testOperandsThatNeverMeetAnOperatorDoNotPileUpAndLaterTextStillShows(): void
+    {
+        $content = 'BT /F1 12 Tf 72 720 Td ' . str_repeat('[(x)] ', 80000) . '(visible) Tj ET';
+        $doc = new Document(new File(self::pageWithContent(PdfBuilder::stream($content))), new Options());
+
+        // The 80,000 arrays no operator ever reads are dropped, but the string shown right after them is not.
+        $this->assertStringContainsString('visible', $doc->text());
+    }
+
+    public function testASingleArrayLongerThanTheCapIsReadOnlyUpToIt(): void
+    {
+        $content = 'BT /F1 12 Tf 72 720 Td [ ' . str_repeat('(x) ', 60000) . '] TJ ET';
+        $doc = new Document(new File(self::pageWithContent(PdfBuilder::stream($content))), new Options());
+        $text = $doc->text();
+
+        $this->assertStringContainsString('x', $text);
+        $this->assertLessThan(60000, substr_count($text, 'x'));
+    }
+
+    public function testAStreamTooLargeToUnpackIsNotedOncePerStreamEvenAtDifferentLimits(): void
+    {
+        $file = new File(PdfBuilder::build(['x']));
+        $file->warn('Stream 5 is too large to unpack in the memory that is left (limit 10MB); the rest of it was left out', 'stream-too-large-5');
+        $file->warn('Stream 5 is too large to unpack in the memory that is left (limit 4MB); the rest of it was left out', 'stream-too-large-5');
+        $file->warn('Stream 6 is too large to unpack in the memory that is left (limit 4MB); the rest of it was left out', 'stream-too-large-6');
+
+        $this->assertCount(2, $file->warnings);
+        $this->assertSame(1, count(array_filter($file->warnings, static fn(string $w): bool => str_contains($w, 'Stream 5'))));
+    }
 }

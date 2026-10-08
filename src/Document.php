@@ -180,6 +180,10 @@ final class Document
         }
         $out = [];
         foreach ($annots as $ref) {
+            // No more appearances than the page will ever draw: past that, the rest are never reached anyway.
+            if (count($out) >= $this->interpreter->maxFormRuns) {
+                break;
+            }
             $annot = $file->dict($ref);
             $subtype = $annot['Subtype'] ?? null;
             if ($annot === null || $subtype === '/Link' || $subtype === '/Popup') {

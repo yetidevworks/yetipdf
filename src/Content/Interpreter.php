@@ -84,10 +84,13 @@ final class Interpreter
     private const TAIL = 8192;
     /** Content larger than this is checked against the memory that is left before it is tokenized. */
     private const GUARDED_SIZE = 1 << 20;
-    /** Bytes for each token the tokenizer keeps: the string itself and its slot in the result array. */
-    private const TOKEN_COST = 64;
-    /** Bytes that begin a token the tokenizer keeps: ( < / [ ] T q Q ' " */
-    private const TOKEN_STARTS = [40, 60, 47, 91, 93, 84, 113, 81, 39, 34];
+    /** Most bytes one token of content costs in the list the tokenizer builds; the operand stack is bounded on its own. */
+    private const TOKEN_COST = 80;
+    /**
+     * Most operands to keep on the stack. It is emptied after every operator, so it only grows when a page piles
+     * up operands an operator never reads. An operator reads the top few, so the rest can go without losing anything.
+     */
+    private const MAX_STACK = 8192;
 
     private static ?string $tokenPattern = null;
 
@@ -181,7 +184,8 @@ final class Interpreter
      */
     public function page(string $content, array $resources, array $appearances = []): string
     {
-        $this->maxOut = $this->file->limit();
+        // Half of what a stream may be: the caller tidies the text afterwards, and that takes two more copies of it.
+        $this->maxOut = intdiv($this->file->limit(), 2);
         try {
             $this->draw($content, $resources, $appearances);
         } catch (\OverflowException) {
@@ -286,7 +290,17 @@ final class Interpreter
         $saved = [];
 
         foreach ($m[0] as $tok) {
+            // Operands with no operator to read them pile up here. Keep the top of the stack and drop the rest:
+            // every operator reads only its last few, so nothing a real one needs is lost.
+            if (isset($stack[self::MAX_STACK])) {
+                $stack = array_slice($stack, -16);
+            }
             $ch = $tok[0];
+
+            // An array far longer than any real one is kept only up to the cap; the rest is ignored until it closes.
+            if ($array !== null && $ch !== ']' && isset($array[self::MAX_STACK])) {
+                continue;
+            }
 
             if (isset(self::NUMBER_START[$ch])) {
                 // One token holds every number up to the next operator, so the thousands of path
@@ -298,6 +312,9 @@ final class Interpreter
                     $array[] = (float)$tok;
                 } else {
                     foreach (self::numbers($tok) as $number) {
+                        if (isset($array[self::MAX_STACK])) {
+                            break;
+                        }
                         $array[] = $number;
                     }
                 }
@@ -441,7 +458,7 @@ final class Interpreter
                     if ($n >= 2 && is_string($stack[$n - 2])) {
                         $name = substr($stack[$n - 2], 1);
                         $this->size = self::last($stack[$n - 1]);
-                        if ($flushes !== $this->fonts->flushes || isset($fontCache[255])) {
+                        if ($flushes !== $this->fonts->flushes || count($fontCache) >= 256) {
                             // The loader has let its fonts go to free memory, or this content names a great many.
                             $fontCache = [];
                             $flushes = $this->fonts->flushes;
@@ -507,19 +524,17 @@ final class Interpreter
     /**
      * Whether the tokens of this content would fit in the memory that is left.
      *
-     * The tokenizer makes a PHP string for every token it keeps, about 50 bytes each. The tokens it keeps start
-     * with a few characters, so counting those gives an upper bound without building anything. Path and colour
-     * operators are not among them, which is why a page of dense drawing is not turned away.
+     * The tokens are counted first, without being kept: replacing each with nothing costs one string no longer
+     * than the content. Each token then costs a slot and a short string in the list the tokenizer returns. The
+     * operand stack, which a hostile page can grow instead, is bounded separately, so this need only cover that list.
      */
     private function fits(string $content): bool
     {
-        $counts = count_chars($content, 1);
-        $tokens = substr_count($content, 'cm') + substr_count($content, 'Do') + substr_count($content, 'BT');
-        foreach (self::TOKEN_STARTS as $byte) {
-            $tokens += $counts[$byte] ?? 0;
+        self::$tokenPattern ??= self::buildTokenPattern();
+        if (preg_replace(self::$tokenPattern, '', $content, -1, $tokens) === null) {
+            // The pattern gave up. It will again in a moment, and that is reported there.
+            return true;
         }
-        // Most T operators have numbers in front of them, and those are kept as a token of their own.
-        $tokens += $counts[84] ?? 0;
         return $tokens * self::TOKEN_COST <= $this->file->room();
     }
 
@@ -721,7 +736,9 @@ final class Interpreter
         }
 
         $this->heldCount++;
-        $this->kept += strlen($text);
+        // Held text is sorted, joined, turned around and then written into the page, and for a while there
+        // is a copy of it at each of those stages. It counts four times over.
+        $this->kept += 4 * strlen($text);
         if ($this->kept > $this->maxOut) {
             throw new \OverflowException('Page text is larger than the memory that is left allows');
         }
@@ -822,7 +839,10 @@ final class Interpreter
     private function place(): void
     {
         $text = [];
-        foreach ($this->pieces as $i => $pieces) {
+        foreach (array_keys($this->pieces) as $i) {
+            $pieces = $this->pieces[$i];
+            // Let go of as the line is built, so the pieces and the line are not both held for the whole page.
+            unset($this->pieces[$i]);
             // Left to right along the line. A vowel mark has no width and sits on its letter, so it sorts after it.
             usort($pieces, static fn(array $a, array $b): int => [$a[0], $b[1] - $b[0]] <=> [$b[0], $a[1] - $a[0]]);
 
@@ -874,7 +894,9 @@ final class Interpreter
                 $before = $piece;
                 $spaced = false;
             }
-            $text["\0\x1E$i\x1E\0"] = Bidi::logical($visual . $last);
+            unset($pieces, $piece, $before);
+            $visual .= $last;
+            $text["\0\x1E$i\x1E\0"] = Bidi::logical($visual);
         }
         $this->out = strtr($this->out, $text);
         $this->lines = [];
