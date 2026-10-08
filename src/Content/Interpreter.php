@@ -271,7 +271,7 @@ final class Interpreter
 
                 case 'Td':
                 case 'TD':
-                    $v = self::numbers((string)end($stack));
+                    $v = self::operands(end($stack));
                     $n = count($v);
                     if ($n >= 2) {
                         $tx = $v[$n - 2];
@@ -291,7 +291,7 @@ final class Interpreter
                     break;
 
                 case 'Tm':
-                    $v = self::numbers((string)end($stack));
+                    $v = self::operands(end($stack));
                     $n = count($v);
                     if ($n >= 6) {
                         $this->ta = $this->la = $v[$n - 6];
@@ -317,7 +317,7 @@ final class Interpreter
 
                 case '"':
                     $n = count($stack);
-                    $v = $n >= 2 ? self::numbers((string)$stack[$n - 2]) : [];
+                    $v = $n >= 2 ? self::operands($stack[$n - 2]) : [];
                     if (count($v) >= 2) {
                         $this->wordSpace = $v[count($v) - 2];
                         $this->charSpace = $v[count($v) - 1];
@@ -362,7 +362,7 @@ final class Interpreter
                     break;
 
                 case 'cm':
-                    $v = self::numbers((string)end($stack));
+                    $v = self::operands(end($stack));
                     $n = count($v);
                     if ($n >= 6) {
                         $this->concat($v[$n - 6], $v[$n - 5], $v[$n - 4], $v[$n - 3], $v[$n - 2], $v[$n - 1]);
@@ -616,6 +616,16 @@ final class Interpreter
             $out[] = (float)$part;
         }
         return $out;
+    }
+
+    /**
+     * The numbers in front of an operator, or none when something else is there (a broken stream can put a string or an array in their place).
+     *
+     * @return list<float>
+     */
+    private static function operands(mixed $run): array
+    {
+        return is_string($run) ? self::numbers($run) : [];
     }
 
     /** The last number in a token. */
