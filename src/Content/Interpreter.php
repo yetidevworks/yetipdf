@@ -78,6 +78,8 @@ final class Interpreter
         '-' => true, '.' => true, '+' => true,
     ];
 
+    /** Most graphics states kept by q at once. */
+    private const MAX_SAVED = 4096;
     /** Text is put aside once $out is longer than this, so that taking some back never copies the whole page. */
     private const TAIL = 8192;
     /** Content larger than this is checked against the memory that is left before it is tokenized. */
@@ -474,7 +476,10 @@ final class Interpreter
                     break;
 
                 case 'q':
-                    $saved[] = $this->snapshot();
+                    // Nothing real nests this deep; a file that only saves the state would fill memory with copies of it.
+                    if (!isset($saved[self::MAX_SAVED])) {
+                        $saved[] = $this->snapshot();
+                    }
                     break;
                 case 'Q':
                     if ($saved !== []) {

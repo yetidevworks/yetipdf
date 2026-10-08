@@ -558,4 +558,10 @@ final class HardeningTest extends TestCase
         $this->assertSame('', $doc->text());
         $this->assertContains('Cross-reference table was missing or damaged; rebuilt by scanning the file', $doc->warnings());
     }
+
+    public function testSavingTheGraphicsStateWithoutEverRestoringItDoesNotPileUpCopies(): void
+    {
+        $content = str_repeat('q 1 0 0 1 1 1 cm ', 6000) . 'BT /F1 12 Tf 72 720 Td (still here) Tj ET' . str_repeat(' Q', 6000);
+        $this->assertSame('still here', YetiPdf::parse(PdfBuilder::build([$content]))->text());
+    }
 }
