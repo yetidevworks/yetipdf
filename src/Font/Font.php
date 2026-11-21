@@ -445,3 +445,8 @@ final class Font
         return $this->codeText[$code] = $text;
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Font\\Font', false)) {
+    \class_alias(Font::class, 'YetiPdf\\Font\\Font', false);
+}

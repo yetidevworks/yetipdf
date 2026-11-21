@@ -83,3 +83,8 @@ final class CidCollection implements CodeMap
         return self::$tables[$ordering] = $table;
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Font\\CidCollection', false)) {
+    \class_alias(CidCollection::class, 'YetiPdf\\Font\\CidCollection', false);
+}

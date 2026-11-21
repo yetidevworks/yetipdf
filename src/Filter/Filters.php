@@ -353,3 +353,8 @@ final class Filters
         return $out;
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Filter\\Filters', false)) {
+    \class_alias(Filters::class, 'YetiPdf\\Filter\\Filters', false);
+}

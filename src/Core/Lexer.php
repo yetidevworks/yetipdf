@@ -537,3 +537,8 @@ final class Lexer
         ) ?? $s;
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Core\\Lexer', false)) {
+    \class_alias(Lexer::class, 'YetiPdf\\Core\\Lexer', false);
+}

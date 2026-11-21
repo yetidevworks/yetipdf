@@ -121,3 +121,8 @@ final class Encodings
         return $t;
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Font\\Encodings', false)) {
+    \class_alias(Encodings::class, 'YetiPdf\\Font\\Encodings', false);
+}

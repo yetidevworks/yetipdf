@@ -84,3 +84,8 @@ final class Ranges
         return null;
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Font\\Ranges', false)) {
+    \class_alias(Ranges::class, 'YetiPdf\\Font\\Ranges', false);
+}

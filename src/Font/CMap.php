@@ -252,3 +252,8 @@ final class CMap implements CodeMap
         return ($text === "\0" || $text === "\u{FFFD}") ? '' : $text;
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Font\\CMap', false)) {
+    \class_alias(CMap::class, 'YetiPdf\\Font\\CMap', false);
+}

@@ -177,3 +177,8 @@ final class Bidi
         return strtr($text, self::$forms);
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Content\\Bidi', false)) {
+    \class_alias(Bidi::class, 'YetiPdf\\Content\\Bidi', false);
+}

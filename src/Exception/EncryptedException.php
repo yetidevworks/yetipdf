@@ -8,3 +8,8 @@ namespace YetiPdf\Read\Exception;
 class EncryptedException extends PdfException
 {
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Exception\\EncryptedException', false)) {
+    \class_alias(EncryptedException::class, 'YetiPdf\\Exception\\EncryptedException', false);
+}

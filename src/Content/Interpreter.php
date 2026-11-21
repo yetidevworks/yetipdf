@@ -1677,3 +1677,8 @@ final class Interpreter
             . '|(?<![A-Za-z0-9*\'"./#+-])(?:T[jJmdDfcwzL*]|BT|cm|Do|[qQ\'"])(?![A-Za-z0-9*\'"])~';
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Content\\Interpreter', false)) {
+    \class_alias(Interpreter::class, 'YetiPdf\\Content\\Interpreter', false);
+}

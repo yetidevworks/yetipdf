@@ -52,3 +52,8 @@ final class Memory
         };
     }
 }
+
+// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+if (!\class_exists('YetiPdf\\Core\\Memory', false)) {
+    \class_alias(Memory::class, 'YetiPdf\\Core\\Memory', false);
+}

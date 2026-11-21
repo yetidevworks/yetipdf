@@ -60,7 +60,7 @@ I also ran all 1,009 PDFs in the combined corpus, including the ones with no tex
 composer require yetidevworks/yetipdf-read
 ```
 
-Up to 1.2 this package was `yetidevworks/yetipdf`, with its classes directly under `YetiPdf\`. They're under `YetiPdf\Read\` now. Swap the package name in your `composer.json` and your code keeps working as it is: the old class names are kept as aliases until 2.0.
+Up to 1.2 this package was `yetidevworks/yetipdf`, with its classes directly under `YetiPdf\`. They're under `YetiPdf\Read\` now. Swap the package name in your `composer.json` and your code keeps working as it is: every class keeps its old name as an alias until 2.0, in type hints and catch blocks too. (A copy of 1.2 that another package bundles in its own vendor folder keeps its own classes, separate from these.)
 
 You need **PHP 8.3** or newer and the `zlib` extension, which you almost certainly have. That's it.
 
