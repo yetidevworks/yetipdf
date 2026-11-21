@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Core;
+namespace YetiPdf\Read\Core;
 
-use YetiPdf\Crypt\Decryptor;
-use YetiPdf\Exception\InvalidPdfException;
-use YetiPdf\Filter\Filters;
+use YetiPdf\Read\Crypt\Decryptor;
+use YetiPdf\Read\Exception\InvalidPdfException;
+use YetiPdf\Read\Filter\Filters;
 
 /**
  * The file-level view of a PDF: the cross-reference table, lazy object loading, and stream decoding.

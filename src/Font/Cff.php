@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
 /**
  * Reads the built-in encoding out of a CFF font program (the Type1C kind embedded in PDFs).

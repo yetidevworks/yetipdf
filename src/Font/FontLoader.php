@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
-use YetiPdf\Core\File;
-use YetiPdf\Core\Memory;
-use YetiPdf\Core\PdfString;
-use YetiPdf\Core\Ref;
-use YetiPdf\Core\Stream;
-use YetiPdf\Filter\Filters;
+use YetiPdf\Read\Core\File;
+use YetiPdf\Read\Core\Memory;
+use YetiPdf\Read\Core\PdfString;
+use YetiPdf\Read\Core\Ref;
+use YetiPdf\Read\Core\Stream;
+use YetiPdf\Read\Filter\Filters;
 
 /**
  * Builds Font objects from font dictionaries.

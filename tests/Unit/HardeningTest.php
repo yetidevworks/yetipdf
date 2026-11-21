@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Tests\Unit;
+namespace YetiPdf\Read\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
-use YetiPdf\Content\Interpreter;
-use YetiPdf\Core\File;
-use YetiPdf\Core\Ref;
-use YetiPdf\Document;
-use YetiPdf\Filter\Filters;
-use YetiPdf\Font\CMap;
-use YetiPdf\Font\Font;
-use YetiPdf\Font\FontLoader;
-use YetiPdf\Font\Ranges;
-use YetiPdf\Font\Utf;
-use YetiPdf\Options;
-use YetiPdf\Tests\PdfBuilder;
-use YetiPdf\YetiPdf;
+use YetiPdf\Read\Content\Interpreter;
+use YetiPdf\Read\Core\File;
+use YetiPdf\Read\Core\Ref;
+use YetiPdf\Read\Document;
+use YetiPdf\Read\Filter\Filters;
+use YetiPdf\Read\Font\CMap;
+use YetiPdf\Read\Font\Font;
+use YetiPdf\Read\Font\FontLoader;
+use YetiPdf\Read\Font\Ranges;
+use YetiPdf\Read\Font\Utf;
+use YetiPdf\Read\Options;
+use YetiPdf\Read\Tests\PdfBuilder;
+use YetiPdf\Read\YetiPdf;
 
 /** Small files that ask for far more memory or time than they are worth must cost a bounded amount and lose only their own part. */
 final class HardeningTest extends TestCase

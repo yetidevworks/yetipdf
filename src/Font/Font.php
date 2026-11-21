@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
-use YetiPdf\Core\Memory;
+use YetiPdf\Read\Core\Memory;
 
 /**
  * Everything the content interpreter needs from a font: how to turn the bytes of a shown string

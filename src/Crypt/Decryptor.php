@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Crypt;
+namespace YetiPdf\Read\Crypt;
 
-use YetiPdf\Core\PdfString;
-use YetiPdf\Exception\EncryptedException;
+use YetiPdf\Read\Core\PdfString;
+use YetiPdf\Read\Exception\EncryptedException;
 
 /**
  * The standard security handler (RC4 40-128 bit, AES-128, AES-256), read side only.

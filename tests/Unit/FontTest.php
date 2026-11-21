@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Tests\Unit;
+namespace YetiPdf\Read\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use YetiPdf\Core\File;
-use YetiPdf\Core\Ref;
-use YetiPdf\Font\Encodings;
-use YetiPdf\Font\FontLoader;
-use YetiPdf\Tests\PdfBuilder;
+use YetiPdf\Read\Core\File;
+use YetiPdf\Read\Core\Ref;
+use YetiPdf\Read\Font\Encodings;
+use YetiPdf\Read\Font\FontLoader;
+use YetiPdf\Read\Tests\PdfBuilder;
 
 final class FontTest extends TestCase
 {

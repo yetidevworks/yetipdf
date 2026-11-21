@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
 /** Small UTF helpers, so the library does not need mbstring or iconv. */
 final class Utf

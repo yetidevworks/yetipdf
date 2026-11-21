@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Content;
+namespace YetiPdf\Read\Content;
 
-use YetiPdf\Core\File;
-use YetiPdf\Core\Lexer;
-use YetiPdf\Core\Stream;
-use YetiPdf\Font\Font;
-use YetiPdf\Font\FontLoader;
-use YetiPdf\Font\Utf;
+use YetiPdf\Read\Core\File;
+use YetiPdf\Read\Core\Lexer;
+use YetiPdf\Read\Core\Stream;
+use YetiPdf\Read\Font\Font;
+use YetiPdf\Read\Font\FontLoader;
+use YetiPdf\Read\Font\Utf;
 
 /**
  * Runs a page's content stream and collects the text it draws.

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Exception;
+namespace YetiPdf\Read\Exception;
 
 class PdfException extends \RuntimeException
 {

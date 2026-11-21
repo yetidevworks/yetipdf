@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Core;
+namespace YetiPdf\Read\Core;
 
 /** How much memory is left to work with. The limits that guard against hostile files scale with it. */
 final class Memory

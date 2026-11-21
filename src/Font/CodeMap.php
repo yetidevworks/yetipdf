@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
 /** Anything that can say which text a character code stands for. */
 interface CodeMap

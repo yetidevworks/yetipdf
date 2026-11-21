@@ -10,7 +10,7 @@ foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php
     }
 }
 
-use YetiPdf\YetiPdf;
+use YetiPdf\Read\YetiPdf;
 
 $args = array_slice($argv, 1);
 $stats = in_array('--stats', $args, true);

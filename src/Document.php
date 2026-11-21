@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf;
+namespace YetiPdf\Read;
 
-use YetiPdf\Content\Interpreter;
-use YetiPdf\Core\File;
-use YetiPdf\Core\PdfString;
-use YetiPdf\Core\Ref;
-use YetiPdf\Core\Stream;
-use YetiPdf\Font\Encodings;
-use YetiPdf\Font\FontLoader;
-use YetiPdf\Font\Utf;
+use YetiPdf\Read\Content\Interpreter;
+use YetiPdf\Read\Core\File;
+use YetiPdf\Read\Core\PdfString;
+use YetiPdf\Read\Core\Ref;
+use YetiPdf\Read\Core\Stream;
+use YetiPdf\Read\Font\Encodings;
+use YetiPdf\Read\Font\FontLoader;
+use YetiPdf\Read\Font\Utf;
 
 /**
  * An opened PDF.

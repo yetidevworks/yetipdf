@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Filter;
+namespace YetiPdf\Read\Filter;
 
 /**
  * Stream decoders. Only the filters that can carry text or document structure are implemented;

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf;
+namespace YetiPdf\Read;
 
 final class Options
 {

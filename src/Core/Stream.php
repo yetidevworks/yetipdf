@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Core;
+namespace YetiPdf\Read\Core;
 
 /** A stream object. Holds its dictionary and where its bytes start; the data is read and decoded on demand. */
 final class Stream

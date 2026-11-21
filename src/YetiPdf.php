@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf;
+namespace YetiPdf\Read;
 
-use YetiPdf\Core\File;
-use YetiPdf\Exception\InvalidPdfException;
+use YetiPdf\Read\Core\File;
+use YetiPdf\Read\Exception\InvalidPdfException;
 
 /**
  * Entry point.

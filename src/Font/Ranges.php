@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
 /**
  * Code ranges that may overlap, flattened once into sorted pieces that cannot, so finding the range

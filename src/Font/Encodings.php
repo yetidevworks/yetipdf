@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
 /** The built-in single-byte encodings, as code => UTF-8 text tables. */
 final class Encodings

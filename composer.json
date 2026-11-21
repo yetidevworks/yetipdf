@@ -1,5 +1,5 @@
 {
-    "name": "yetidevworks/yetipdf",
+    "name": "yetidevworks/yetipdf-read",
     "description": "Fast, dependency-free PDF text extraction for PHP, built for search indexing",
     "type": "library",
     "license": "MIT",
@@ -17,18 +17,22 @@
     "require-dev": {
         "phpunit/phpunit": "^11.0"
     },
+    "replace": {
+        "yetidevworks/yetipdf": "self.version"
+    },
     "suggest": {
         "ext-openssl": "Needed to read AES-encrypted PDFs",
         "ext-mbstring": "Needed for PDFs using legacy CJK encodings (Shift-JIS, GBK, Big5, UHC)"
     },
     "autoload": {
         "psr-4": {
-            "YetiPdf\\": "src/"
-        }
+            "YetiPdf\\Read\\": "src/"
+        },
+        "files": ["src/legacy.php"]
     },
     "autoload-dev": {
         "psr-4": {
-            "YetiPdf\\Tests\\": "tests/"
+            "YetiPdf\\Read\\Tests\\": "tests/"
         }
     },
     "bin": ["bin/yetipdf"],

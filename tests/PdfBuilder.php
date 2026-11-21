@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Tests;
+namespace YetiPdf\Read\Tests;
 
 /** Writes small, valid PDFs for tests: one page per content stream, with whatever font objects the test supplies. */
 final class PdfBuilder

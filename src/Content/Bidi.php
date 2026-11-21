@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Content;
+namespace YetiPdf\Read\Content;
 
-use YetiPdf\Font\Utf;
+use YetiPdf\Read\Font\Utf;
 
 /**
  * Puts a line with Hebrew or Arabic in it into reading order.

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Tests\Unit;
+namespace YetiPdf\Read\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use YetiPdf\Exception\InvalidPdfException;
-use YetiPdf\Tests\PdfBuilder;
-use YetiPdf\YetiPdf;
+use YetiPdf\Read\Exception\InvalidPdfException;
+use YetiPdf\Read\Tests\PdfBuilder;
+use YetiPdf\Read\YetiPdf;
 
 final class ExtractionTest extends TestCase
 {

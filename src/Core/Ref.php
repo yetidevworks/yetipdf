@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Core;
+namespace YetiPdf\Read\Core;
 
 /** An indirect reference: "12 0 R". */
 final class Ref

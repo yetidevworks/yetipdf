@@ -1,10 +1,10 @@
-# YetiPDF
+# YetiPDF Read
 
 Fast PDF text extraction in pure PHP, with no binaries and no dependencies. It runs about as quick as the C++ tool everybody else shells out to.
 
 I wrote **YetiPDF** because I wanted PDFs to show up in **YetiSearch** results, and nothing in PHP did the job. One library needed 779MB to read a book. Another gave up on one PDF in eight. The popular answer is to install poppler and call `pdftotext`, which is great until you're on shared hosting with `exec` turned off. So I started over, with one goal: get the words out of a PDF, quickly, without falling over.
 
-That's all it does. It won't render pages or pull out images. If you want to index PDFs for search, or hand their contents to an LLM, this is for you.
+That's all it does. It won't render pages or pull out images. If you want to index PDFs for search, or hand their contents to an LLM, this is for you. Its other half, [YetiPDF Write](https://github.com/yetidevworks/yetipdf-write), makes PDFs.
 
 ## How fast?
 
@@ -57,15 +57,17 @@ I also ran all 1,009 PDFs in the combined corpus, including the ones with no tex
 ## Install
 
 ```bash
-composer require yetidevworks/yetipdf
+composer require yetidevworks/yetipdf-read
 ```
+
+Up to 1.2 this package was `yetidevworks/yetipdf`, with its classes directly under `YetiPdf\`. They're under `YetiPdf\Read\` now. Swap the package name in your `composer.json` and your code keeps working as it is: the old class names are kept as aliases until 2.0.
 
 You need **PHP 8.3** or newer and the `zlib` extension, which you almost certainly have. That's it.
 
 ## Use it
 
 ```php
-use YetiPdf\YetiPdf;
+use YetiPdf\Read\YetiPdf;
 
 $doc = YetiPdf::open('manual.pdf');
 
@@ -90,7 +92,7 @@ YetiPdf::parse($bytes);   // if you already have the PDF in a string
 And some options, all with sensible defaults:
 
 ```php
-use YetiPdf\Options;
+use YetiPdf\Read\Options;
 
 $doc = YetiPdf::open('report.pdf', new Options(
     password: 'secret',        // for PDFs that need one to open

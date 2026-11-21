@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Tests\Unit;
+namespace YetiPdf\Read\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
-use YetiPdf\Core\Lexer;
-use YetiPdf\Core\PdfString;
-use YetiPdf\Core\Ref;
-use YetiPdf\Core\Stream;
-use YetiPdf\Crypt\Decryptor;
-use YetiPdf\Filter\Filters;
-use YetiPdf\Font\GlyphList;
+use YetiPdf\Read\Core\Lexer;
+use YetiPdf\Read\Core\PdfString;
+use YetiPdf\Read\Core\Ref;
+use YetiPdf\Read\Core\Stream;
+use YetiPdf\Read\Crypt\Decryptor;
+use YetiPdf\Read\Filter\Filters;
+use YetiPdf\Read\Font\GlyphList;
 
 final class CoreTest extends TestCase
 {

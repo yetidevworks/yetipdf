@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Core;
+namespace YetiPdf\Read\Core;
 
 /**
  * Parses PDF objects out of a byte string.

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
 /**
  * Text for the CIDs of one of Adobe's CJK character collections (Japan1, GB1, CNS1, Korea1, KR).

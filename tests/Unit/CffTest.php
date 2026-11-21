@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Tests\Unit;
+namespace YetiPdf\Read\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use YetiPdf\Font\Cff;
-use YetiPdf\Tests\PdfBuilder;
-use YetiPdf\YetiPdf;
+use YetiPdf\Read\Font\Cff;
+use YetiPdf\Read\Tests\PdfBuilder;
+use YetiPdf\Read\YetiPdf;
 
 final class CffTest extends TestCase
 {

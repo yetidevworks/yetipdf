@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
 /** Turns glyph names ("Aacute", "f_i", "uni20AC") into text. */
 final class GlyphList

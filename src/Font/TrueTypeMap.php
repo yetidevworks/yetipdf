@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace YetiPdf\Font;
+namespace YetiPdf\Read\Font;
 
 /**
  * Character codes to text for a composite font that has no ToUnicode CMap, read from the font

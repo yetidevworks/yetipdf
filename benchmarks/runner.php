@@ -32,7 +32,7 @@ try {
             $text = (new PrinsFrank\PdfParser\PdfParser())->parseFile($pdf, false)->getText();
             break;
         case 'yetipdf':
-            $text = YetiPdf\YetiPdf::open($pdf)->text();
+            $text = YetiPdf\Read\YetiPdf::open($pdf)->text();
             break;
         case 'smalot':
             $text = (new Smalot\PdfParser\Parser())->parseFile($pdf)->getText();
