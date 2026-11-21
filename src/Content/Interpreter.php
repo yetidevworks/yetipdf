@@ -173,6 +173,13 @@ final class Interpreter
     private float $hScale = 1.0;
     private float $leading = 0.0;
 
+    // Cached page-space text basis derived from CTM (a..d), text matrix (ta..td), and font size.
+    private bool $geomDirty = true;
+    private float $ghLen = 1.0;
+    private float $gux = 1.0;
+    private float $guy = 0.0;
+    private float $gsize = 0.0;
+
     public function __construct(private readonly File $file, private readonly FontLoader $fonts)
     {
     }
@@ -225,6 +232,7 @@ final class Interpreter
         $this->font = null;
         $this->size = $this->charSpace = $this->wordSpace = $this->leading = 0.0;
         $this->hScale = 1.0;
+        $this->geomDirty = true;
         $this->formRuns = $this->formBytes = 0;
 
         $this->run($content, $resources, 0, []);
@@ -245,6 +253,7 @@ final class Interpreter
             $this->font = null;
             $this->charSpace = $this->wordSpace = 0.0;
             $this->hScale = 1.0;
+            $this->geomDirty = true;
             // Push the previous end point far away so the annotation starts on its own line.
             $this->px = $this->py = -1.0e9;
             $matrix = $this->file->resolve($stream->dict['Matrix'] ?? null);
@@ -284,147 +293,294 @@ final class Interpreter
 
         $fontDict = null;
         $fontCache = [];
+        $tfCache = [];
         $flushes = $this->fonts->flushes;
         $stack = [];
-        $array = null;
         $saved = [];
+        $tokens = $m[0];
+        unset($m);
+        $count = count($tokens);
 
-        foreach ($m[0] as $tok) {
-            // Operands with no operator to read them pile up here. Keep the top of the stack and drop the rest:
-            // every operator reads only its last few, so nothing a real one needs is lost.
-            if (isset($stack[self::MAX_STACK])) {
-                $stack = array_slice($stack, -16);
-            }
+        for ($i = 0; $i < $count; $i++) {
+            $tok = $tokens[$i];
             $ch = $tok[0];
 
-            // An array far longer than any real one is kept only up to the cap; the rest is ignored until it closes.
-            if ($array !== null && $ch !== ']' && isset($array[self::MAX_STACK])) {
+            if ($ch === '[') {
+                $this->runTJ($tok, $tokens, $i, $count);
+                $stack = [];
                 continue;
             }
-
             if (isset(self::NUMBER_START[$ch])) {
-                // One token holds every number up to the next operator, so the thousands of path
-                // coordinates on a page cost one loop step per operator rather than one per number.
-                if ($array === null) {
-                    // Operators read at most six numbers, and a run of them can be megabytes long.
-                    $stack[] = isset($tok[1024]) ? self::tail($tok) : $tok;
-                } elseif (strpbrk($tok, " \n\r\t") === false) {
-                    $array[] = (float)$tok;
-                } else {
-                    foreach (self::numbers($tok) as $number) {
-                        if (isset($array[self::MAX_STACK])) {
-                            break;
+                $tlen = strlen($tok);
+                $last = $tok[$tlen - 1];
+                if ($last === 'm') {
+                    // Combined "<numbers> Tm" or "<numbers> cm".
+                    $op = $tok[$tlen - 2];
+                    if ($op === 'T') {
+                        if (str_starts_with($tok, '1 0 0 -1 ')) {
+                            $sp = strpos($tok, ' ', 9);
+                            if ($sp !== false && $sp < $tlen - 4) {
+                                $sp2 = strpos($tok, ' ', $sp + 1);
+                                if ($sp2 === $tlen - 3 && strpbrk($tok, "\n\r\t\f\0\x0B") === false) {
+                                    if ($this->ta !== 1.0 || $this->tb !== 0.0 || $this->tc !== 0.0 || $this->td !== -1.0) {
+                                        $this->ta = $this->la = 1.0;
+                                        $this->tb = $this->lb = 0.0;
+                                        $this->tc = $this->lc = 0.0;
+                                        $this->td = $this->ld = -1.0;
+                                        $this->geomDirty = true;
+                                    }
+                                    $this->te = $this->le = (float)substr($tok, 9, $sp - 9);
+                                    $this->tf = $this->lf = (float)substr($tok, $sp + 1, $sp2 - $sp - 1);
+                                    $stack = [];
+                                    continue;
+                                }
+                            }
+                        } elseif (str_starts_with($tok, '1 0 0 1 ')) {
+                            $sp = strpos($tok, ' ', 8);
+                            if ($sp !== false && $sp < $tlen - 4) {
+                                $sp2 = strpos($tok, ' ', $sp + 1);
+                                if ($sp2 === $tlen - 3 && strpbrk($tok, "\n\r\t\f\0\x0B") === false) {
+                                    if ($this->ta !== 1.0 || $this->tb !== 0.0 || $this->tc !== 0.0 || $this->td !== 1.0) {
+                                        $this->ta = $this->la = 1.0;
+                                        $this->tb = $this->lb = 0.0;
+                                        $this->tc = $this->lc = 0.0;
+                                        $this->td = $this->ld = 1.0;
+                                        $this->geomDirty = true;
+                                    }
+                                    $this->te = $this->le = (float)substr($tok, 8, $sp - 8);
+                                    $this->tf = $this->lf = (float)substr($tok, $sp + 1, $sp2 - $sp - 1);
+                                    $stack = [];
+                                    continue;
+                                }
+                            }
                         }
-                        $array[] = $number;
+                        $s = rtrim($tlen > 1026 ? self::tail(substr($tok, 0, $tlen - 2)) : substr($tok, 0, $tlen - 2), " \t\r\n\f\0\x0B");
+                        $this->applyTm($s);
+                    } else {
+                        if (str_starts_with($tok, '1 0 0 1 ')) {
+                            $sp = strpos($tok, ' ', 8);
+                            if ($sp !== false && $sp < $tlen - 4) {
+                                $sp2 = strpos($tok, ' ', $sp + 1);
+                                if ($sp2 === $tlen - 3 && strpbrk($tok, "\n\r\t\f\0\x0B") === false) {
+                                    $tx = (float)substr($tok, 8, $sp - 8);
+                                    $ty = (float)substr($tok, $sp + 1, $sp2 - $sp - 1);
+                                    $this->e += $tx * $this->a + $ty * $this->c;
+                                    $this->f += $tx * $this->b + $ty * $this->d;
+                                    $stack = [];
+                                    continue;
+                                }
+                            }
+                        }
+                        $s = rtrim($tlen > 1026 ? self::tail(substr($tok, 0, $tlen - 2)) : substr($tok, 0, $tlen - 2), " \t\r\n\f\0\x0B");
+                        $this->applyCm($s);
                     }
-                }
-                continue;
-            }
-            if ($ch === '(' || $ch === '<') {
-                if ($tok === '<<') {
+                    $stack = [];
                     continue;
                 }
-                if ($array !== null) {
-                    $array[] = $tok;
+                if ($last === 'd' || $last === 'D') {
+                    $s = rtrim($tlen > 1026 ? self::tail(substr($tok, 0, $tlen - 2)) : substr($tok, 0, $tlen - 2), " \t\r\n\f\0\x0B");
+                    $this->applyTd($s, $last === 'D');
+                    $stack = [];
+                    continue;
+                }
+                if ($last === 'c' || $last === 'w' || $last === 'z' || $last === 'L') {
+                    $s = rtrim($tlen > 1026 ? self::tail(substr($tok, 0, $tlen - 2)) : substr($tok, 0, $tlen - 2), " \t\r\n\f\0\x0B");
+                    $val = self::last($s);
+                    if ($last === 'c') {
+                        $this->charSpace = $val;
+                    } elseif ($last === 'w') {
+                        $this->wordSpace = $val;
+                    } elseif ($last === 'z') {
+                        $this->hScale = $val / 100;
+                    } else {
+                        $this->leading = $val;
+                    }
+                    $stack = [];
+                    continue;
+                }
+                if (isset($stack[self::MAX_STACK])) {
+                    $stack = array_slice($stack, -16);
+                }
+                // Operators read at most six numbers, and a run of them can be megabytes long.
+                $stack[] = $tlen > 1024 ? self::tail($tok) : $tok;
+                continue;
+            }
+            if ($ch === '(') {
+                if ($tok[strlen($tok) - 1] === 'j') {
+                    $body = substr($tok, 1, strrpos($tok, ')') - 1);
+                    $this->show(str_contains($body, '\\') ? Lexer::unescape($body) : $body);
+                    $stack = [];
                 } else {
+                    if (isset($stack[self::MAX_STACK])) {
+                        $stack = array_slice($stack, -16);
+                    }
                     $stack[] = $tok;
                 }
                 continue;
             }
             if ($ch === '/') {
+                if (isset($tfCache[$tok]) && $flushes === $this->fonts->flushes) {
+                    [$this->font, $newSize] = $tfCache[$tok];
+                    if ($this->size !== $newSize) {
+                        $this->size = $newSize;
+                        $this->geomDirty = true;
+                    }
+                    $stack = [];
+                    continue;
+                }
+                $tlen = strlen($tok);
+                $sp = strcspn($tok, " \t\r\n\f\0\x0B", 1);
+                if ($sp + 1 < $tlen) {
+                    $last = $tok[$tlen - 1];
+                    if ($last === 'f') {
+                        $name = substr($tok, 1, $sp);
+                        $numRaw = substr($tok, $sp + 1, $tlen - $sp - 3);
+                        $numPart = trim(isset($numRaw[1024]) ? self::tail($numRaw) : $numRaw, " \t\r\n\f\0\x0B");
+                        $newSize = self::last($numPart);
+                        if ($this->size !== $newSize) {
+                            $this->size = $newSize;
+                            $this->geomDirty = true;
+                        }
+                        if ($flushes !== $this->fonts->flushes || count($fontCache) >= 256) {
+                            $fontCache = [];
+                            $tfCache = [];
+                            $flushes = $this->fonts->flushes;
+                        }
+                        if (!array_key_exists($name, $fontCache)) {
+                            $fontDict ??= $this->file->dict($resources['Font'] ?? null) ?? [];
+                            $fontCache[$name] = isset($fontDict[$name]) ? $this->fonts->load($fontDict[$name]) : null;
+                        }
+                        $this->font = $fontCache[$name];
+                        if (count($tfCache) < 256) {
+                            $tfCache[$tok] = [$this->font, $newSize];
+                        }
+                        $stack = [];
+                        continue;
+                    }
+                    if ($last === 'o') {
+                        if ($depth < self::MAX_FORM_DEPTH) {
+                            $this->form(substr($tok, 1, $sp), $resources, $depth, $active);
+                        }
+                        $stack = [];
+                        continue;
+                    }
+                }
+                if (isset($stack[self::MAX_STACK])) {
+                    $stack = array_slice($stack, -16);
+                }
                 $stack[] = $tok;
                 continue;
             }
-            if ($ch === '[') {
-                $array = [];
-                continue;
-            }
-            if ($ch === ']') {
-                $stack[] = $array ?? [];
-                $array = null;
-                continue;
-            }
-            if ($ch === '%' || $ch === '>') {
+            if ($ch === '<') {
+                if ($tok[strlen($tok) - 1] === 'j') {
+                    $hex = substr($tok, 1, strrpos($tok, '>') - 1);
+                    if ($hex !== '') {
+                        $this->show(((strlen($hex) & 1) === 0 && ctype_xdigit($hex)) ? (string)hex2bin($hex) : Lexer::hex($hex));
+                    }
+                    $stack = [];
+                } else {
+                    if (isset($stack[self::MAX_STACK])) {
+                        $stack = array_slice($stack, -16);
+                    }
+                    $stack[] = $tok;
+                }
                 continue;
             }
 
             // An operator.
             switch ($tok) {
-                case 'Tj':
-                    $s = end($stack);
-                    if (is_string($s)) {
-                        $this->show(self::bytes($s));
+                case 'q':
+                    // A graphics state save followed only by cm calls and its matching Q (all drawing was skipped) is a no-op.
+                    $j = $i + 1;
+                    while ($j < $count) {
+                        $nt = $tokens[$j];
+                        if ($nt === 'Q') {
+                            $i = $j;
+                            $stack = [];
+                            continue 3;
+                        }
+                        $nc = $nt[0];
+                        if (isset(self::NUMBER_START[$nc]) && $nt[strlen($nt) - 1] === 'm' && $nt[strlen($nt) - 2] === 'c') {
+                            $j++;
+                            continue;
+                        }
+                        break;
+                    }
+                    // Nothing real nests this deep; a file that only saves the state would fill memory with copies of it.
+                    if (!isset($saved[self::MAX_SAVED])) {
+                        $saved[] = $this->snapshot();
+                    }
+                    break;
+                case 'Q':
+                    if ($saved !== []) {
+                        $this->restore(array_pop($saved));
                     }
                     break;
 
-                case 'TJ':
-                    $items = end($stack);
-                    if (is_array($items)) {
-                        // Kerned text arrives as many short strings with small adjustments between them.
-                        // Adjustments too small to be a word gap are folded into one run, so the costly
-                        // part (decoding and positioning) happens once per word instead of once per fragment.
-                        $run = '';
-                        $kern = 0.0;
-                        $gap = -900.0 * $this->wordGap;
-                        foreach ($items as $item) {
-                            if (is_string($item)) {
-                                $run .= ($item[0] === '(' && !str_contains($item, '\\')) ? substr($item, 1, -1) : self::bytes($item);
-                            } elseif ($item > $gap && $item <= 200.0 && $run !== '') {
-                                $kern += $item;
-                            } else {
-                                if ($run !== '') {
-                                    $this->show($run);
-                                    $run = '';
-                                }
-                                $tx = -($item + $kern) * 0.001 * $this->size * $this->hScale;
-                                $this->te += $tx * $this->ta;
-                                $this->tf += $tx * $this->tb;
-                                $kern = 0.0;
-                            }
-                        }
-                        if ($run !== '') {
-                            $this->show($run);
-                        }
-                        if ($kern !== 0.0) {
-                            $tx = -$kern * 0.001 * $this->size * $this->hScale;
-                            $this->te += $tx * $this->ta;
-                            $this->tf += $tx * $this->tb;
-                        }
+                case 'BT':
+                    if ($this->ta !== 1.0 || $this->tb !== 0.0 || $this->tc !== 0.0 || $this->td !== 1.0) {
+                        $this->geomDirty = true;
+                    }
+                    $this->ta = $this->td = $this->la = $this->ld = 1.0;
+                    $this->tb = $this->tc = $this->te = $this->tf = 0.0;
+                    $this->lb = $this->lc = $this->le = $this->lf = 0.0;
+                    break;
+
+                case 'Tm':
+                    $s = end($stack);
+                    if (is_string($s)) {
+                        $this->applyTm($s);
                     }
                     break;
 
                 case 'Td':
                 case 'TD':
-                    $v = self::numbers(end($stack));
-                    $n = count($v);
-                    if ($n >= 2) {
-                        $tx = $v[$n - 2];
-                        $ty = $v[$n - 1];
-                        if ($tok === 'TD') {
-                            $this->leading = -$ty;
-                        }
-                        $this->le += $tx * $this->la + $ty * $this->lc;
-                        $this->lf += $tx * $this->lb + $ty * $this->ld;
-                        $this->ta = $this->la;
-                        $this->tb = $this->lb;
-                        $this->tc = $this->lc;
-                        $this->td = $this->ld;
-                        $this->te = $this->le;
-                        $this->tf = $this->lf;
+                    $s = end($stack);
+                    if (is_string($s)) {
+                        $this->applyTd($s, $tok === 'TD');
                     }
                     break;
 
-                case 'Tm':
-                    $v = self::numbers(end($stack));
-                    $n = count($v);
-                    if ($n >= 6) {
-                        $this->ta = $this->la = $v[$n - 6];
-                        $this->tb = $this->lb = $v[$n - 5];
-                        $this->tc = $this->lc = $v[$n - 4];
-                        $this->td = $this->ld = $v[$n - 3];
-                        $this->te = $this->le = $v[$n - 2];
-                        $this->tf = $this->lf = $v[$n - 1];
+                case 'cm':
+                    $s = end($stack);
+                    if (is_string($s)) {
+                        $this->applyCm($s);
                     }
+                    break;
+
+                case 'Tf':
+                    $n = count($stack);
+                    if ($n >= 2 && is_string($stack[$n - 2])) {
+                        $name = substr($stack[$n - 2], 1);
+                        $newSize = self::last($stack[$n - 1]);
+                        if ($this->size !== $newSize) {
+                            $this->size = $newSize;
+                            $this->geomDirty = true;
+                        }
+                        if ($flushes !== $this->fonts->flushes || count($fontCache) >= 256) {
+                            // The loader has let its fonts go to free memory, or this content names a great many.
+                            $fontCache = [];
+                            $flushes = $this->fonts->flushes;
+                        }
+                        if (!array_key_exists($name, $fontCache)) {
+                            $fontDict ??= $this->file->dict($resources['Font'] ?? null) ?? [];
+                            $fontCache[$name] = isset($fontDict[$name]) ? $this->fonts->load($fontDict[$name]) : null;
+                        }
+                        $this->font = $fontCache[$name];
+                    }
+                    break;
+
+                case 'Tc':
+                    $this->charSpace = self::last(end($stack));
+                    break;
+                case 'Tw':
+                    $this->wordSpace = self::last(end($stack));
+                    break;
+                case 'Tz':
+                    $this->hScale = $stack === [] ? 1.0 : self::last(end($stack)) / 100;
+                    break;
+                case 'TL':
+                    $this->leading = self::last(end($stack));
                     break;
 
                 case 'T*':
@@ -453,60 +609,10 @@ final class Interpreter
                     }
                     break;
 
-                case 'Tf':
-                    $n = count($stack);
-                    if ($n >= 2 && is_string($stack[$n - 2])) {
-                        $name = substr($stack[$n - 2], 1);
-                        $this->size = self::last($stack[$n - 1]);
-                        if ($flushes !== $this->fonts->flushes || count($fontCache) >= 256) {
-                            // The loader has let its fonts go to free memory, or this content names a great many.
-                            $fontCache = [];
-                            $flushes = $this->fonts->flushes;
-                        }
-                        if (!array_key_exists($name, $fontCache)) {
-                            $fontDict ??= $this->file->dict($resources['Font'] ?? null) ?? [];
-                            $fontCache[$name] = isset($fontDict[$name]) ? $this->fonts->load($fontDict[$name]) : null;
-                        }
-                        $this->font = $fontCache[$name];
-                    }
-                    break;
-
-                case 'BT':
-                    $this->ta = $this->td = $this->la = $this->ld = 1.0;
-                    $this->tb = $this->tc = $this->te = $this->tf = 0.0;
-                    $this->lb = $this->lc = $this->le = $this->lf = 0.0;
-                    break;
-
-                case 'Tc':
-                    $this->charSpace = self::last(end($stack));
-                    break;
-                case 'Tw':
-                    $this->wordSpace = self::last(end($stack));
-                    break;
-                case 'Tz':
-                    $this->hScale = $stack === [] ? 1.0 : self::last(end($stack)) / 100;
-                    break;
-                case 'TL':
-                    $this->leading = self::last(end($stack));
-                    break;
-
-                case 'cm':
-                    $v = self::numbers(end($stack));
-                    $n = count($v);
-                    if ($n >= 6) {
-                        $this->concat($v[$n - 6], $v[$n - 5], $v[$n - 4], $v[$n - 3], $v[$n - 2], $v[$n - 1]);
-                    }
-                    break;
-
-                case 'q':
-                    // Nothing real nests this deep; a file that only saves the state would fill memory with copies of it.
-                    if (!isset($saved[self::MAX_SAVED])) {
-                        $saved[] = $this->snapshot();
-                    }
-                    break;
-                case 'Q':
-                    if ($saved !== []) {
-                        $this->restore(array_pop($saved));
+                case 'Tj':
+                    $s = end($stack);
+                    if (is_string($s)) {
+                        $this->show(self::bytes($s));
                     }
                     break;
 
@@ -519,6 +625,391 @@ final class Interpreter
             }
             $stack = [];
         }
+    }
+
+    private function applyTm(string $s): void
+    {
+        if (str_starts_with($s, '1 0 0 -1 ')) {
+            $sp = strpos($s, ' ', 9);
+            if ($sp !== false && strpos($s, ' ', $sp + 1) === false && strpbrk($s, "\n\r\t") === false) {
+                if ($this->ta !== 1.0 || $this->tb !== 0.0 || $this->tc !== 0.0 || $this->td !== -1.0) {
+                    $this->geomDirty = true;
+                }
+                $this->ta = $this->la = 1.0;
+                $this->tb = $this->lb = 0.0;
+                $this->tc = $this->lc = 0.0;
+                $this->td = $this->ld = -1.0;
+                $this->te = $this->le = (float)substr($s, 9, $sp - 9);
+                $this->tf = $this->lf = (float)substr($s, $sp + 1);
+                return;
+            }
+        } elseif (str_starts_with($s, '1 0 0 1 ')) {
+            $sp = strpos($s, ' ', 8);
+            if ($sp !== false && strpos($s, ' ', $sp + 1) === false && strpbrk($s, "\n\r\t") === false) {
+                if ($this->ta !== 1.0 || $this->tb !== 0.0 || $this->tc !== 0.0 || $this->td !== 1.0) {
+                    $this->geomDirty = true;
+                }
+                $this->ta = $this->la = 1.0;
+                $this->tb = $this->lb = 0.0;
+                $this->tc = $this->lc = 0.0;
+                $this->td = $this->ld = 1.0;
+                $this->te = $this->le = (float)substr($s, 8, $sp - 8);
+                $this->tf = $this->lf = (float)substr($s, $sp + 1);
+                return;
+            }
+        }
+        if (sscanf($s, '%f %f %f %f %f %f%n', $v0, $v1, $v2, $v3, $v4, $v5, $consumed) === 7 && $consumed === strlen($s)) {
+            if ($this->ta !== $v0 || $this->tb !== $v1 || $this->tc !== $v2 || $this->td !== $v3) {
+                $this->geomDirty = true;
+            }
+            $this->ta = $this->la = $v0;
+            $this->tb = $this->lb = $v1;
+            $this->tc = $this->lc = $v2;
+            $this->td = $this->ld = $v3;
+            $this->te = $this->le = $v4;
+            $this->tf = $this->lf = $v5;
+            return;
+        }
+        $v = self::numbers($s);
+        $n = count($v);
+        if ($n >= 6) {
+            $v0 = $v[$n - 6];
+            $v1 = $v[$n - 5];
+            $v2 = $v[$n - 4];
+            $v3 = $v[$n - 3];
+            if ($this->ta !== $v0 || $this->tb !== $v1 || $this->tc !== $v2 || $this->td !== $v3) {
+                $this->geomDirty = true;
+            }
+            $this->ta = $this->la = $v0;
+            $this->tb = $this->lb = $v1;
+            $this->tc = $this->lc = $v2;
+            $this->td = $this->ld = $v3;
+            $this->te = $this->le = $v[$n - 2];
+            $this->tf = $this->lf = $v[$n - 1];
+        }
+    }
+
+    private function applyTd(string $s, bool $setLeading): void
+    {
+        $sp = strpos($s, ' ');
+        if ($sp !== false && strpos($s, ' ', $sp + 1) === false && strpbrk($s, "\n\r\t") === false) {
+            $tx = (float)substr($s, 0, $sp);
+            $ty = (float)substr($s, $sp + 1);
+        } elseif (sscanf($s, '%f %f%n', $tx, $ty, $consumed) === 3 && $consumed === strlen($s)) {
+            // parsed via sscanf
+        } else {
+            $v = self::numbers($s);
+            $n = count($v);
+            if ($n < 2) {
+                return;
+            }
+            $tx = $v[$n - 2];
+            $ty = $v[$n - 1];
+        }
+        if ($setLeading) {
+            $this->leading = -$ty;
+        }
+        $this->le += $tx * $this->la + $ty * $this->lc;
+        $this->lf += $tx * $this->lb + $ty * $this->ld;
+        $this->ta = $this->la;
+        $this->tb = $this->lb;
+        $this->tc = $this->lc;
+        $this->td = $this->ld;
+        $this->te = $this->le;
+        $this->tf = $this->lf;
+    }
+
+    private function applyCm(string $s): void
+    {
+        if (str_starts_with($s, '1 0 0 1 ')) {
+            $sp = strpos($s, ' ', 8);
+            if ($sp !== false && strpos($s, ' ', $sp + 1) === false && strpbrk($s, "\n\r\t") === false) {
+                $tx = (float)substr($s, 8, $sp - 8);
+                $ty = (float)substr($s, $sp + 1);
+                $this->e += $tx * $this->a + $ty * $this->c;
+                $this->f += $tx * $this->b + $ty * $this->d;
+                return;
+            }
+        }
+        if (sscanf($s, '%f %f %f %f %f %f%n', $v0, $v1, $v2, $v3, $v4, $v5, $consumed) === 7 && $consumed === strlen($s)) {
+            $this->concat($v0, $v1, $v2, $v3, $v4, $v5);
+            return;
+        }
+        $v = self::numbers($s);
+        $n = count($v);
+        if ($n >= 6) {
+            $this->concat($v[$n - 6], $v[$n - 5], $v[$n - 4], $v[$n - 3], $v[$n - 2], $v[$n - 1]);
+        }
+    }
+
+    /**
+     * Executes one matched "[...] TJ" token directly without allocating an intermediate operand array.
+     *
+     * @param list<string> $tokens
+     */
+    private function runTJ(string $tok, array $tokens, int $idx, int $count): void
+    {
+        $end = strrpos($tok, ']');
+        if ($end === false || $end <= 1) {
+            return;
+        }
+        $p = 1;
+        if ($tok[1] <= ' ') {
+            $p += strspn($tok, " \t\r\n\f\0\x0B", 1);
+            if ($p >= $end) {
+                return;
+            }
+        }
+        // Fast path for a single plain literal string, e.g. "[(The SQL Language)] TJ".
+        if ($tok[$p] === '(') {
+            $span = strcspn($tok, '()\\', $p + 1);
+            $q = $p + 1 + $span;
+            if ($q < $end && $tok[$q] === ')') {
+                $after = $q + 1;
+                if ($after === $end || $after + strspn($tok, " \t\r\n\f\0\x0B", $after) === $end) {
+                    if ($span > 0) {
+                        $this->show(substr($tok, $p + 1, $span));
+                    }
+                    return;
+                }
+            }
+        }
+
+        // Kerned text arrives as many short strings with small adjustments between them.
+        // Adjustments too small to be a word gap are folded into one run, so decoding and
+        // positioning happen once per word instead of once per fragment.
+        $gap = -900.0 * $this->wordGap;
+
+        // Collapse small-kerned plain or escaped literal-string and even-length hex-string arrays in C.
+        if ($gap <= -99.0 && $end <= 4096) {
+            $inner = rtrim(substr($tok, $p, $end - $p), " \t\r\n\f\0\x0B");
+            if ($inner !== '' && $inner[0] === '(' && !str_contains($inner, '<')) {
+                $leadShift = 0.0;
+                $work = $inner;
+                // Handle leading empty string + shift, e.g. "()-12(n)-30(e)..." common in RFC/Cairo PDFs.
+                if (str_starts_with($work, '()') && preg_match('/^\(\)[\0\s]*+([+-]?(?:\d++\.?\d*+|\.\d++))[\0\s]*+(?=\()/', $work, $lm) === 1) {
+                    $leadShift = (float)$lm[1];
+                    $work = substr($work, strlen($lm[0]));
+                }
+                if (!str_contains($work, '()')) {
+                    $hasBackslash = str_contains($work, '\\');
+                    $flat = false;
+                    $body = '';
+                    if (!$hasBackslash) {
+                        $collapsed = preg_replace('/\)[\0\s]*+(?:-(?:[0-8]?\d|9[0-8])(?:\.\d++)?|[01]?\d?\d(?:\.\d++)?)[\0\s]*+\(/', '', $work);
+                        if ($collapsed !== null) {
+                            $clen = strlen($collapsed);
+                            if ($clen >= 2 && $collapsed[0] === '(' && $collapsed[$clen - 1] === ')' && strcspn($collapsed, '()', 1) === $clen - 2) {
+                                $flat = true;
+                                $body = substr($collapsed, 1, $clen - 2);
+                            }
+                        }
+                    } elseif (preg_match('/^\((?:[^()\\\\]++|\\\\[\s\S])*+\)(?:[\0\s]*+(?:-(?:[0-8]?\d|9[0-8])(?:\.\d++)?|[01]?\d?\d(?:\.\d++)?)[\0\s]*+\((?:[^()\\\\]++|\\\\[\s\S])*+\))*+$/', $work) === 1) {
+                        $flat = true;
+                        preg_match_all('/\(((?:[^()\\\\]++|\\\\[\s\S])*+)\)/', $work, $sm);
+                        foreach ($sm[1] as $part) {
+                            $body .= str_contains($part, '\\') ? Lexer::unescape($part) : $part;
+                        }
+                    }
+                    if ($flat) {
+                        if ($leadShift !== 0.0) {
+                            $tx = -$leadShift * 0.001 * $this->size * $this->hScale;
+                            $this->te += $tx * $this->ta;
+                            $this->tf += $tx * $this->tb;
+                        }
+                        $this->show($body);
+                        if ($this->tjNeedsKern($tokens, $idx, $count)) {
+                            $kernSum = 0.0;
+                            if ($hasBackslash) {
+                                // Sum the numbers between matched literal strings.
+                                $parts = preg_split('/\((?:[^()\\\\]++|\\\\[\s\S])*+\)/', $work, -1, PREG_SPLIT_NO_EMPTY);
+                                if ($parts) {
+                                    foreach ($parts as $numStr) {
+                                        $kernSum += (float)$numStr;
+                                    }
+                                }
+                            } elseif (preg_match_all('/\)[\0\s]*+(-(?:[0-8]?\d|9[0-8])(?:\.\d++)?|[01]?\d?\d(?:\.\d++)?)[\0\s]*+\(/', $work, $km)) {
+                                $kernSum = (float)array_sum($km[1]);
+                            }
+                            if ($kernSum !== 0.0) {
+                                $tx = -$kernSum * 0.001 * $this->size * $this->hScale;
+                                $this->te += $tx * $this->ta;
+                                $this->tf += $tx * $this->tb;
+                            }
+                        }
+                        return;
+                    }
+                }
+            } elseif ($inner !== '' && $inner[0] === '<' && !str_contains($inner, '(')
+                && preg_match('/^<(?:[0-9A-Fa-f]{2})++>(?:[\0\s]*+(?:-(?:[0-8]?\d|9[0-8])(?:\.\d++)?|[01]?\d?\d(?:\.\d++)?)[\0\s]*+<(?:[0-9A-Fa-f]{2})++>)*+$/', $inner) === 1
+                && !$this->tjNeedsKern($tokens, $idx, $count)) {
+                $collapsed = preg_replace('/>[^<]++</', '', $inner);
+                if ($collapsed !== null) {
+                    $this->show((string)hex2bin(substr($collapsed, 1, -1)));
+                    return;
+                }
+            }
+        }
+
+        $run = '';
+        $kern = 0.0;
+        $items = 0;
+
+        while ($p < $end) {
+            $c = $tok[$p];
+            if ($c === '(') {
+                if (++$items > self::MAX_STACK) {
+                    break;
+                }
+                $span = strcspn($tok, '()\\', $p + 1);
+                $q = $p + 1 + $span;
+                if ($q < $end && $tok[$q] === ')') {
+                    $run .= substr($tok, $p + 1, $span);
+                    $p = $q + 1;
+                    continue;
+                }
+                $start = $p + 1;
+                $depth = 1;
+                $escaped = false;
+                $i = $q;
+                while ($i < $end) {
+                    $ch = $tok[$i];
+                    if ($ch === '\\') {
+                        $escaped = true;
+                        $i += 2;
+                        if ($i < $end) {
+                            $i += strcspn($tok, '()\\', $i);
+                        }
+                        continue;
+                    }
+                    if ($ch === '(') {
+                        $depth++;
+                    } elseif (--$depth === 0) {
+                        break;
+                    }
+                    $i++;
+                    if ($i < $end) {
+                        $i += strcspn($tok, '()\\', $i);
+                    }
+                }
+                $body = substr($tok, $start, max(0, $i - $start));
+                $run .= $escaped ? Lexer::unescape($body) : $body;
+                $p = min($end, $i + 1);
+                continue;
+            }
+            if ($c === '<') {
+                if (++$items > self::MAX_STACK) {
+                    break;
+                }
+                $q = strpos($tok, '>', $p + 1);
+                if ($q === false || $q > $end) {
+                    break;
+                }
+                $hex = substr($tok, $p + 1, $q - $p - 1);
+                $p = $q + 1;
+                if ($hex !== '') {
+                    $run .= ((strlen($hex) & 1) === 0 && ctype_xdigit($hex)) ? (string)hex2bin($hex) : Lexer::hex($hex);
+                }
+                continue;
+            }
+            if (isset(self::NUMBER_START[$c])) {
+                if (++$items > self::MAX_STACK) {
+                    break;
+                }
+                $n = ($c === '-' || $c === '+')
+                    ? 1 + strspn($tok, '0123456789.', $p + 1)
+                    : strspn($tok, '0123456789.', $p);
+                $item = (float)substr($tok, $p, $n);
+                $p += $n;
+                if ($item > $gap && $item <= 200.0 && $run !== '') {
+                    $kern += $item;
+                } else {
+                    if ($run !== '') {
+                        $this->show($run);
+                        $run = '';
+                    }
+                    $tx = -($item + $kern) * 0.001 * $this->size * $this->hScale;
+                    $this->te += $tx * $this->ta;
+                    $this->tf += $tx * $this->tb;
+                    $kern = 0.0;
+                }
+                continue;
+            }
+            if ($c <= ' ') {
+                $ws = strspn($tok, " \t\r\n\f\0\x0B", $p);
+                $p += $ws > 0 ? $ws : 1;
+                continue;
+            }
+            if ($c === '%') {
+                $p += strcspn($tok, "\r\n", $p);
+                continue;
+            }
+            if ($c === '/') {
+                $p += 1 + strcspn($tok, "\0\t\n\f\r ()<>[]{}/%", $p + 1);
+                continue;
+            }
+            $p++;
+        }
+
+        if ($run !== '') {
+            $this->show($run);
+        }
+        if ($kern !== 0.0) {
+            $tx = -$kern * 0.001 * $this->size * $this->hScale;
+            $this->te += $tx * $this->ta;
+            $this->tf += $tx * $this->tb;
+        }
+    }
+
+    /**
+     * Whether $this->te/$this->tf after the TJ at $idx might be read before being overwritten.
+     *
+     * @param list<string> $tokens
+     */
+    private function tjNeedsKern(array $tokens, int $idx, int $count): bool
+    {
+        for ($j = $idx + 1; $j < $count; $j++) {
+            $nt = $tokens[$j];
+            $nc = $nt[0];
+            if ($nc === '[' || $nc === '(' || $nc === '<' || $nt === 'Tj' || $nt === 'Do') {
+                return true;
+            }
+            if ($nc === '/') {
+                if ($nt[strlen($nt) - 1] === 'o') {
+                    return true;
+                }
+                continue;
+            }
+            if (isset(self::NUMBER_START[$nc])) {
+                $nl = $nt[strlen($nt) - 1];
+                if ($nl === 'm') {
+                    if ($nt[strlen($nt) - 2] === 'T') {
+                        // Only a complete 6-operand Tm resets te/tf; an incomplete one (e.g. "1 Tm") is a no-op.
+                        $parts = preg_split('/[\0\s]+/', trim(substr($nt, 0, -2), " \t\r\n\f\0\x0B"), -1, PREG_SPLIT_NO_EMPTY);
+                        if ($parts && count($parts) >= 6) {
+                            return false;
+                        }
+                    }
+                    continue;
+                }
+                if ($nl === 'd' || $nl === 'D') {
+                    $parts = preg_split('/[\0\s]+/', trim(substr($nt, 0, -2), " \t\r\n\f\0\x0B"), -1, PREG_SPLIT_NO_EMPTY);
+                    if ($parts && count($parts) >= 2) {
+                        return false;
+                    }
+                    continue;
+                }
+                continue;
+            }
+            if ($nt === 'T*' || $nt === 'BT' || $nt === "'" || $nt === '"') {
+                return false;
+            }
+            if ($nt === 'Tm' || $nt === 'Td' || $nt === 'TD') {
+                // Standalone operator (operands separated by comment): stay conservative in case operands are incomplete.
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -551,24 +1042,24 @@ final class Interpreter
         $this->tf = $this->lf;
     }
 
-    private function show(string $s): void
+    private function updateGeom(): void
     {
-        $font = $this->font;
-        if ($font === null || $s === '') {
-            return;
-        }
-        $text = $font->decode($s);
-        $advance = ($font->w * $this->size + $font->n * $this->charSpace + $font->sp * $this->wordSpace) * $this->hScale;
+        $ma = $this->ta * $this->a + $this->tb * $this->c;
+        $mb = $this->ta * $this->b + $this->tb * $this->d;
+        $mc = $this->tc * $this->a + $this->td * $this->c;
+        $md = $this->tc * $this->b + $this->td * $this->d;
 
-        if ($text !== '') {
-            // Text space to page space.
-            $ma = $this->ta * $this->a + $this->tb * $this->c;
-            $mb = $this->ta * $this->b + $this->tb * $this->d;
-            $mc = $this->tc * $this->a + $this->td * $this->c;
-            $md = $this->tc * $this->b + $this->td * $this->d;
-            $x = $this->te * $this->a + $this->tf * $this->c + $this->e;
-            $y = $this->te * $this->b + $this->tf * $this->d + $this->f;
-
+        if ($mb === 0.0 && $mc === 0.0) {
+            $hLen = abs($ma);
+            if ($hLen < 1e-9) {
+                $hLen = 1.0;
+                $ux = 1.0;
+            } else {
+                $ux = $ma >= 0.0 ? 1.0 : -1.0;
+            }
+            $uy = 0.0;
+            $size = abs($this->size * $md);
+        } else {
             $hLen = sqrt($ma * $ma + $mb * $mb);
             if ($hLen < 1e-9) {
                 $hLen = 1.0;
@@ -579,13 +1070,54 @@ final class Interpreter
                 $uy = $mb / $hLen;
             }
             $size = abs($this->size) * sqrt($mc * $mc + $md * $md);
-            if ($size < 1e-6) {
-                $size = abs($this->size) * $hLen;
-            }
+        }
+        if ($size < 1e-6) {
+            $size = abs($this->size) * $hLen;
+        }
+        $this->ghLen = $hLen;
+        $this->gux = $ux;
+        $this->guy = $uy;
+        $this->gsize = $size;
+        $this->geomDirty = false;
+    }
 
-            if (($font->rtl || $this->held !== null) && $this->hold($font, $s, $text, $x, $y, $ux, $uy, $size, $hLen, $advance)) {
-                $this->advance($advance);
-                return;
+    private function show(string $s): void
+    {
+        $font = $this->font;
+        if ($font === null || $s === '') {
+            return;
+        }
+        $hit = $font->memo[$s] ?? null;
+        if ($hit !== null) {
+            $text = $hit[0];
+            $advance = ($hit[1] * $this->size + $hit[2] * $this->charSpace + $hit[3] * $this->wordSpace) * $this->hScale;
+        } else {
+            $text = $font->decode($s);
+            $advance = ($font->w * $this->size + $font->n * $this->charSpace + $font->sp * $this->wordSpace) * $this->hScale;
+        }
+
+        if ($text !== '') {
+            // Text space to page space.
+            if ($this->geomDirty) {
+                $this->updateGeom();
+            }
+            $hLen = $this->ghLen;
+            $ux = $this->gux;
+            $uy = $this->guy;
+            $size = $this->gsize;
+            $x = $this->te * $this->a + $this->tf * $this->c + $this->e;
+            $y = $this->te * $this->b + $this->tf * $this->d + $this->f;
+
+            if ($font->rtl || $this->held !== null) {
+                if ($hit !== null) {
+                    $font->w = $hit[1];
+                    $font->n = $hit[2];
+                    $font->sp = $hit[3];
+                }
+                if ($this->hold($font, $s, $text, $x, $y, $ux, $uy, $size, $hLen, $advance)) {
+                    $this->advance($advance);
+                    return;
+                }
             }
 
             $glue = '';
@@ -595,8 +1127,13 @@ final class Interpreter
             } else {
                 $dx = $x - $this->px;
                 $dy = $y - $this->py;
-                $along = $dx * $this->pux + $dy * $this->puy;
-                $off = abs($dy * $this->pux - $dx * $this->puy);
+                if ($this->puy === 0.0 && $this->pux === 1.0) {
+                    $along = $dx;
+                    $off = $dy < 0.0 ? -$dy : $dy;
+                } else {
+                    $along = $dx * $this->pux + $dy * $this->puy;
+                    $off = abs($dy * $this->pux - $dx * $this->puy);
+                }
                 $ref = $size > $this->psize ? $size : $this->psize;
 
                 if ($this->accentAt >= 0 && $off <= $this->lineGap * $ref && $along < 0.05 * $ref && $along > -1.5 * $ref) {
@@ -612,7 +1149,7 @@ final class Interpreter
                             $glue = ' ';
                         }
                     }
-                } elseif ($off > $this->lineGap * $ref || ($ux * $this->pux + $uy * $this->puy) < 0.9) {
+                } elseif ($off > $this->lineGap * $ref || (($ux !== $this->pux || $uy !== $this->puy) && ($ux * $this->pux + $uy * $this->puy) < 0.9)) {
                     $glue = "\n";
                 } elseif ($along > $this->wordGap * $ref) {
                     $glue = ' ';
@@ -632,49 +1169,72 @@ final class Interpreter
             $before = strlen($this->out);
 
             if ($glue === "\n") {
-                $out = $this->out;
-                $len = strlen($out);
                 // "exam-" at a line end followed by "ple": put the word back together.
-                if ($this->dehyphenate && $len > 1 && $out[$len - 1] === '-' && ctype_alpha($out[$len - 2])
+                if ($this->dehyphenate && $before > 1 && $this->out[$before - 1] === '-' && ctype_alpha($this->out[$before - 2])
                     && ($text[0] >= 'a' && $text[0] <= 'z')) {
-                    $this->out = substr($out, 0, -1) . $text;
-                    $this->lineAt = $len - 1;
+                    $this->out = substr($this->out, 0, -1) . $text;
+                    $this->lineAt = $before - 1;
                 } else {
-                    $this->out .= "\n" . $text;
-                    $this->lineAt = $len + 1;
+                    $this->out .= "\n";
+                    $this->out .= $text;
+                    $this->lineAt = $before + 1;
                 }
                 $this->lx = $x;
                 $this->ly = $y;
-            } elseif ($glue === ' ' && $text[0] !== ' ' && !str_ends_with($this->out, ' ')) {
-                $this->out .= ' ' . $text;
+            } elseif ($glue === ' ' && $text[0] !== ' ' && ($before === 0 || $this->out[$before - 1] !== ' ')) {
+                $this->out .= ' ';
+                $this->out .= $text;
             } else {
                 $this->out .= $text;
             }
 
             $last = $text[strlen($text) - 1];
-            $tail = $last < "\x80" ? $last : substr($text, -2);
-            if (isset(self::ACCENTS[$tail])) {
-                $this->accentMark = self::ACCENTS[$tail];
-                $this->accentLone = $tail === $text;
-                if ($this->accentLone) {
-                    $this->accentAt = $before;
-                    $this->accentHadPrev = $this->hasPrev;
-                    $this->accentBreak = $glue === "\n";
-                    $this->ax = $this->px;
-                    $this->ay = $this->py;
-                } else {
-                    $this->accentAt = strlen($this->out) - strlen($tail);
+            if ($last < "\x80") {
+                if (($last === '`' || $last === '^' || $last === '~') && isset(self::ACCENTS[$last])) {
+                    $this->accentMark = self::ACCENTS[$last];
+                    $this->accentLone = $last === $text;
+                    if ($this->accentLone) {
+                        $this->accentAt = $before;
+                        $this->accentHadPrev = $this->hasPrev;
+                        $this->accentBreak = $glue === "\n";
+                        $this->ax = $this->px;
+                        $this->ay = $this->py;
+                    } else {
+                        $this->accentAt = strlen($this->out) - 1;
+                    }
+                } elseif ($this->accentAt >= 0) {
+                    $this->accentAt = -1;
                 }
             } else {
-                $this->accentAt = -1;
+                $tail = substr($text, -2);
+                if (isset(self::ACCENTS[$tail])) {
+                    $this->accentMark = self::ACCENTS[$tail];
+                    $this->accentLone = $tail === $text;
+                    if ($this->accentLone) {
+                        $this->accentAt = $before;
+                        $this->accentHadPrev = $this->hasPrev;
+                        $this->accentBreak = $glue === "\n";
+                        $this->ax = $this->px;
+                        $this->ay = $this->py;
+                    } else {
+                        $this->accentAt = strlen($this->out) - 2;
+                    }
+                } elseif ($this->accentAt >= 0) {
+                    $this->accentAt = -1;
+                }
             }
 
             $this->hasPrev = true;
             $this->psx = $x;
             $this->psy = $y;
             $this->ptext = $text;
-            $this->px = $x + $ux * $advance * $hLen;
-            $this->py = $y + $uy * $advance * $hLen;
+            if ($uy === 0.0) {
+                $this->px = $x + $ux * $advance * $hLen;
+                $this->py = $y;
+            } else {
+                $this->px = $x + $ux * $advance * $hLen;
+                $this->py = $y + $uy * $advance * $hLen;
+            }
             $this->pux = $ux;
             $this->puy = $uy;
             $this->psize = $size;
@@ -943,6 +1503,11 @@ final class Interpreter
     /** CTM = M x CTM */
     private function concat(float $a, float $b, float $c, float $d, float $e, float $f): void
     {
+        if ($a === 1.0 && $b === 0.0 && $c === 0.0 && $d === 1.0) {
+            $this->e += $e * $this->a + $f * $this->c;
+            $this->f += $e * $this->b + $f * $this->d;
+            return;
+        }
         $na = $a * $this->a + $b * $this->c;
         $nb = $a * $this->b + $b * $this->d;
         $nc = $c * $this->a + $d * $this->c;
@@ -950,6 +1515,7 @@ final class Interpreter
         $ne = $e * $this->a + $f * $this->c + $this->e;
         $nf = $e * $this->b + $f * $this->d + $this->f;
         [$this->a, $this->b, $this->c, $this->d, $this->e, $this->f] = [$na, $nb, $nc, $nd, $ne, $nf];
+        $this->geomDirty = true;
     }
 
     /** @return array<int, mixed> */
@@ -964,6 +1530,9 @@ final class Interpreter
     /** @param array<int, mixed> $s */
     private function restore(array $s): void
     {
+        if ($this->a !== $s[0] || $this->b !== $s[1] || $this->c !== $s[2] || $this->d !== $s[3] || $this->size !== $s[7]) {
+            $this->geomDirty = true;
+        }
         [
             $this->a, $this->b, $this->c, $this->d, $this->e, $this->f,
             $this->font, $this->size, $this->charSpace, $this->wordSpace, $this->hScale, $this->leading,
@@ -1015,6 +1584,7 @@ final class Interpreter
 
         $this->restore($state);
         [$this->ta, $this->tb, $this->tc, $this->td, $this->te, $this->tf, $this->la, $this->lb, $this->lc, $this->ld, $this->le, $this->lf] = $textState;
+        $this->geomDirty = true;
     }
 
     /**
@@ -1040,8 +1610,8 @@ final class Interpreter
             return $out;
         }
         $parts = explode(' ', $run);
-        if (strpbrk($run, "\n\r\t") !== false || str_contains($run, '  ')) {
-            $parts = preg_split('/\s+/', $run, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (strpbrk($run, "\n\r\t\f\0\x0B") !== false || str_contains($run, '  ')) {
+            $parts = preg_split('/[\0\s]+/', $run, -1, PREG_SPLIT_NO_EMPTY) ?: [];
         }
         $out = [];
         foreach ($parts as $part) {
@@ -1054,7 +1624,7 @@ final class Interpreter
     private static function tail(string $run): string
     {
         $run = substr($run, -1024);
-        return substr($run, strcspn($run, " \n\r\t") + 1);
+        return substr($run, strcspn($run, " \n\r\t\f\0\x0B") + 1);
     }
 
     /** The last number in a token. */
@@ -1063,7 +1633,7 @@ final class Interpreter
         if (!is_string($run) || $run === '') {
             return 0.0;
         }
-        if (strpbrk($run, " \n\r\t") === false) {
+        if (strpbrk($run, " \n\r\t\f\0\x0B") === false) {
             return (float)$run;
         }
         $numbers = self::numbers($run);
@@ -1088,18 +1658,22 @@ final class Interpreter
         for ($i = 0; $i < 3; $i++) {
             $string = '\((?:[^()\\\\]++|\\\\[\s\S]|' . $string . ')*+\)';
         }
-        // Only what the interpreter acts on is matched. Path, colour and marked-content operators and
-        // their operands match nothing, so the regex engine steps over them without PHP ever seeing them.
-        // On a page full of vector drawing that is most of the stream.
+        // Only what the interpreter acts on is matched. Path, colour, dictionary, comment and marked-content
+        // tokens are skipped inside PCRE so PHP never sees them.
         $number = '[+-]?(?:\d++\.?\d*+|\.\d++)';
-        return '~' . $string
-            . '|<<|>>|<[0-9A-Fa-f\s]*+>'
-            . '|/[^\s/\[\]()<>{}%]*+'
-            // Keep numbers only before a text operator, string or array end. Skip other runs once,
-            // rather than retrying the same failed lookahead at every number in a long drawing path.
-            . '|(?<![A-Za-z0-9.])' . $number . '(?:\s++' . $number . ')*+(?:(?=\s*+(?:T[mdDfcwzL](?![A-Za-z0-9*])|cm(?![A-Za-z0-9*])|["\](<]))|(*SKIP)(*F))'
-            . '|(?<![A-Za-z0-9*\'"./#+-])(?:T[jJmdDfcwzL*]|BT|cm|Do|[qQ\'"])(?![A-Za-z0-9*\'"])'
-            . '|[\[\]]'
-            . '|%[^\r\n]*+~';
+        $name = '/[^\0\s/\[\]()<>{}%]*+';
+        $ws = '[\0\s]';
+        $gap = '(?:[\0\s]++|%[^\r\n]*+)';
+        $tjItem = $ws . '++|' . $string . '|<[0-9A-Fa-f\0\s]*+>|' . $number . '|' . $name . '|%[^\r\n]*+';
+        return '~(?:<<|>>|%[^\r\n]*+)(*SKIP)(*F)'
+            // Match a TJ array and its operator as one token; skip non-TJ arrays (dash patterns, BBox, etc.) once.
+            . '|\[(?:' . $tjItem . ')*+(?:\](?:' . $gap . '*+TJ(?![A-Za-z0-9*\'"])|(*SKIP)(*F))|(*SKIP)(*F))'
+            // Combine a string and Tj into one token; keep strings before ' or " (or comment-separated Tj); skip others.
+            . '|(?:' . $string . '|<[0-9A-Fa-f\0\s]*+>)(?:(?:' . $ws . '*+Tj(?![A-Za-z0-9*\'"]))|(?=' . $gap . '*+(?:Tj(?![A-Za-z0-9*\'"])|[\'"]))|(*SKIP)(*F))'
+            // Combine /Name + Do or /Name + size + Tf into one token; keep comment-separated forms; skip other names.
+            . '|' . $name . '(?:' . $ws . '++Do(?![A-Za-z0-9*\'"])|' . $ws . '++' . $number . '(?:' . $ws . '++' . $number . ')*+' . $ws . '*+Tf(?![A-Za-z0-9*\'"])|(?=' . $gap . '*+(?:Do(?![A-Za-z0-9*\'"])|' . $number . '(?:' . $gap . '++' . $number . ')*+' . $gap . '*+Tf(?![A-Za-z0-9*\'"])))|(*SKIP)(*F))'
+            // Combine numeric operands with Tm/cm/Td/TD/Tc/Tw/Tz/TL into one token; keep bare numbers before Tf, " strings, or comment-separated ops; skip drawing runs once.
+            . '|(?<![A-Za-z0-9.])' . $number . '(?:' . $ws . '++' . $number . ')*+(?:' . $ws . '*+(?:T[mdDcwzL]|cm)(?![A-Za-z0-9*\'"])|(?=' . $gap . '*+(?:T[mdDfcwzL](?![A-Za-z0-9*])|cm(?![A-Za-z0-9*])|["(<]))|(*SKIP)(*F))'
+            . '|(?<![A-Za-z0-9*\'"./#+-])(?:T[jJmdDfcwzL*]|BT|cm|Do|[qQ\'"])(?![A-Za-z0-9*\'"])~';
     }
 }

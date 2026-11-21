@@ -40,7 +40,7 @@ final class File
     private array $trailer = [];
     /** @var array<int, mixed> */
     private array $cache = [];
-    /** @var array<int, array{0: string, 1: array<int, int>}> container number => [decoded data, object number => offset] */
+    /** @var array<int, array{0: string, 1: array<int, int>, 2: bool}> container number => [decoded data, object number => offset, may contain /AP] */
     private array $objStreams = [];
     private bool $rebuilt = false;
     /** @var list<int> object streams found while rebuilding */
@@ -159,6 +159,87 @@ final class File
         return $v instanceof Ref ? null : $v;
     }
 
+    /**
+     * Resolves an annotation dictionary, skipping links, popups, hidden annotations, and those without /AP
+     * before building PHP arrays or touching the object cache.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function annotationDict(mixed $v): ?array
+    {
+        if (!$v instanceof Ref) {
+            return $this->dict($v);
+        }
+        $num = $v->num;
+        if (array_key_exists($num, $this->cache)) {
+            $cached = $this->cache[$num];
+            return $cached instanceof Stream ? $cached->dict : (is_array($cached) ? $cached : null);
+        }
+        $entry = $this->xref[$num] ?? null;
+        if ($entry === null) {
+            return null;
+        }
+        if (($entry & 1) === 0) {
+            $offset = $entry >> 1;
+            $d = $this->data;
+            $total = strlen($d);
+            if ($offset >= 0 && $offset < $total) {
+                $p = $offset + strspn($d, Lexer::WS, $offset);
+                $n1 = strspn($d, '0123456789', $p);
+                if ($n1 > 0 && $n1 <= 10 && (int)substr($d, $p, $n1) === $num) {
+                    $p += $n1;
+                    $ws1 = strspn($d, Lexer::WS, $p);
+                    if ($ws1 > 0) {
+                        $p += $ws1;
+                        $n2 = strspn($d, '0123456789', $p);
+                        if ($n2 > 0 && $n2 <= 10) {
+                            $p += $n2;
+                            $p += strspn($d, Lexer::WS, $p);
+                            if (substr_compare($d, 'obj', $p, 3) === 0) {
+                                $p += 3;
+                                $p += strspn($d, Lexer::WS, $p);
+                                if ($p + 1 < $total && $d[$p] === '<' && $d[$p + 1] === '<') {
+                                    $window = substr($d, $p, 2048);
+                                    $end = strpos($window, 'endobj');
+                                    if ($end !== false) {
+                                        $slice = substr($window, 0, $end);
+                                        // Only trust the raw endobj slice when it cannot have cut inside a literal string or comment.
+                                        if (!str_contains($slice, '/AP') && !str_contains($slice, '#')
+                                            && !str_contains($slice, '\\') && !str_contains($slice, '%')
+                                            && str_ends_with(rtrim($slice, Lexer::WS), '>>')
+                                            && substr_count($slice, '(') === substr_count($slice, ')')) {
+                                            return null;
+                                        }
+                                        if (Lexer::isSkippedAnnotation($d, $p)) {
+                                            return null;
+                                        }
+                                    } elseif (Lexer::isSkippedAnnotation($d, $p)) {
+                                        return null;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            [$data, $offsets, $hasAp] = $this->objectStream($entry >> 1);
+            if (!isset($offsets[$num])) {
+                return null;
+            }
+            $p = $offsets[$num];
+            if (!$hasAp) {
+                $p += strspn($data, Lexer::WS, $p);
+                if (($data[$p] ?? '') === '<' && ($data[$p + 1] ?? '') === '<') {
+                    return null;
+                }
+            } elseif (Lexer::isSkippedAnnotation($data, $p)) {
+                return null;
+            }
+        }
+        return $this->dict($v);
+    }
+
     /** Resolves a value and returns it only if it is a dictionary (a stream counts as its dictionary). */
     public function dict(mixed $v): ?array
     {
@@ -206,15 +287,35 @@ final class File
             return null;
         }
 
-        if (($entry & 1) === 0) {
-            $parsed = $this->capped(fn() => Lexer::indirect($this->data, $entry >> 1));
-            if (($parsed === null || $parsed[0] !== $num) && !$this->rebuilt) {
-                $this->rebuild();
-                return $this->get($num);
+        if ($this->parsing === 0) {
+            Lexer::$room = max(4096, intdiv($this->room(), 512));
+        }
+        $this->parsing++;
+        $needRebuild = false;
+        try {
+            if (($entry & 1) === 0) {
+                $parsed = Lexer::indirect($this->data, $entry >> 1);
+                if (($parsed === null || $parsed[0] !== $num) && !$this->rebuilt) {
+                    $needRebuild = true;
+                    $value = null;
+                } else {
+                    $value = $parsed === null ? null : $parsed[2];
+                }
+            } else {
+                $value = $this->fromObjectStream($entry >> 1, $num);
             }
-            $value = $parsed === null ? null : $parsed[2];
-        } else {
-            $value = $this->capped(fn() => $this->fromObjectStream($entry >> 1, $num));
+        } finally {
+            if (--$this->parsing === 0) {
+                if (Lexer::$room <= 0) {
+                    $this->warn('An object has more parts than fit in the memory that is left; the rest were left out');
+                }
+                Lexer::$room = PHP_INT_MAX;
+            }
+        }
+
+        if ($needRebuild) {
+            $this->rebuild();
+            return $this->get($num);
         }
 
         if (count($this->cache) >= self::CACHE_LIMIT) {
@@ -311,7 +412,8 @@ final class File
         return $raw;
     }
 
-    private function fromObjectStream(int $container, int $num): mixed
+    /** @return array{0: string, 1: array<int, int>, 2: bool} */
+    private function objectStream(int $container): array
     {
         if (!isset($this->objStreams[$container])) {
             $loaded = $this->loadObjectStream($container);
@@ -330,31 +432,37 @@ final class File
             unset($this->objStreams[$container]);
             $this->objStreams[$container] = $entry;
         }
-        [$data, $offsets] = $this->objStreams[$container];
+        return $this->objStreams[$container];
+    }
+
+    private function fromObjectStream(int $container, int $num): mixed
+    {
+        [$data, $offsets] = $this->objectStream($container);
         if (!isset($offsets[$num])) {
             return null;
         }
         $p = $offsets[$num];
-        return $this->capped(fn() => Lexer::value($data, $p));
+        return Lexer::value($data, $p);
     }
 
-    /** @return array{0: string, 1: array<int, int>} */
+    /** @return array{0: string, 1: array<int, int>, 2: bool} */
     private function loadObjectStream(int $container): array
     {
         $entry = $this->xref[$container] ?? null;
         if ($entry === null || ($entry & 1) !== 0) {
-            return ['', []];
+            return ['', [], false];
         }
-        $parsed = Lexer::indirect($this->data, $entry >> 1);
+        $parsed = $this->capped(fn() => Lexer::indirect($this->data, $entry >> 1));
         $stream = $parsed[2] ?? null;
         if (!$stream instanceof Stream) {
-            return ['', []];
+            return ['', [], false];
         }
         $data = $this->streamData($stream) ?? '';
         $first = (int)$this->resolve($stream->dict['First'] ?? 0);
         // Each object listed costs about 80 bytes here and in the table, whatever the stream says it holds.
         $n = min((int)$this->resolve($stream->dict['N'] ?? 0), intdiv($this->room(), 320));
-        return [$data, self::objectOffsets($data, $first, $n)];
+        $hasAp = str_contains($data, '/AP') || str_contains($data, '#');
+        return [$data, self::objectOffsets($data, $first, $n), $hasAp];
     }
 
     /**
@@ -502,12 +610,41 @@ final class File
             if (!is_int($num) || !is_int($count)) {
                 break;
             }
-            for ($i = 0; $i < $count && $pos + $rowLen <= $len; $i++, $pos += $rowLen) {
-                $type = $w0 === 0 ? 1 : self::beInt($data, $pos, $w0);
-                if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
-                    continue;
+            if ($w0 === 1 && $w1 === 3) {
+                for ($i = 0; $i < $count && $pos + $rowLen <= $len; $i++, $pos += $rowLen) {
+                    $type = ord($data[$pos]);
+                    if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
+                        continue;
+                    }
+                    $v = (ord($data[$pos + 1]) << 16) | (ord($data[$pos + 2]) << 8) | ord($data[$pos + 3]);
+                    $this->xref[$num + $i] = ($v << 1) | ($type - 1);
                 }
-                $this->xref[$num + $i] = self::beInt($data, $pos + $w0, $w1) << 1 | ($type - 1);
+            } elseif ($w0 === 1 && $w1 === 4) {
+                for ($i = 0; $i < $count && $pos + $rowLen <= $len; $i++, $pos += $rowLen) {
+                    $type = ord($data[$pos]);
+                    if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
+                        continue;
+                    }
+                    $v = (ord($data[$pos + 1]) << 24) | (ord($data[$pos + 2]) << 16) | (ord($data[$pos + 3]) << 8) | ord($data[$pos + 4]);
+                    $this->xref[$num + $i] = ($v << 1) | ($type - 1);
+                }
+            } elseif ($w0 === 1 && $w1 === 2) {
+                for ($i = 0; $i < $count && $pos + $rowLen <= $len; $i++, $pos += $rowLen) {
+                    $type = ord($data[$pos]);
+                    if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
+                        continue;
+                    }
+                    $v = (ord($data[$pos + 1]) << 8) | ord($data[$pos + 2]);
+                    $this->xref[$num + $i] = ($v << 1) | ($type - 1);
+                }
+            } else {
+                for ($i = 0; $i < $count && $pos + $rowLen <= $len; $i++, $pos += $rowLen) {
+                    $type = $w0 === 0 ? 1 : self::beInt($data, $pos, $w0);
+                    if (($type !== 1 && $type !== 2) || isset($this->xref[$num + $i])) {
+                        continue;
+                    }
+                    $this->xref[$num + $i] = self::beInt($data, $pos + $w0, $w1) << 1 | ($type - 1);
+                }
             }
         }
     }

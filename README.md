@@ -12,27 +12,27 @@ Here are six real documents, one at a time, on PHP 8.4 with no JIT. **pdftotext*
 
 | Document | Pages | YetiPDF | pdftotext | PrinsFrank | smalot |
 |---|---|---|---|---|---|
-| PostgreSQL 16 manual | 3,057 | **1.73s** | 2.22s | 8.13s | 41.06s |
-| NIST SP 800-53 | 492 | **0.63s** | 0.83s | 2.91s | 51.57s |
-| IRS Publication 17 | 142 | **0.36s** | 0.41s | 1.82s | 5.64s |
-| The Memoir Class manual | 625 | **0.44s** | 1.01s | failed | 6.24s |
-| RFC 9110 | 194 | **0.17s** | 0.26s | 0.68s | 15.91s |
-| Pro Git | 501 | **0.11s** | 0.29s | 0.88s | 0.68s |
+| PostgreSQL 16 manual | 3,057 | **1.14s** | 2.22s | 8.13s | 41.06s |
+| NIST SP 800-53 | 492 | **0.45s** | 0.83s | 2.91s | 51.57s |
+| IRS Publication 17 | 142 | **0.27s** | 0.41s | 1.82s | 5.64s |
+| The Memoir Class manual | 625 | **0.32s** | 1.01s | failed | 6.24s |
+| RFC 9110 | 194 | **0.11s** | 0.26s | 0.68s | 15.91s |
+| Pro Git | 501 | **0.09s** | 0.29s | 0.88s | 0.68s |
 
-Yes, that's PHP beating a C++ binary. The PostgreSQL manual is just over a million words, and YetiPDF reads all of it in under two seconds.
+Yes, that's PHP beating a C++ binary. The PostgreSQL manual is just over a million words, and YetiPDF reads all of it in just over a second.
 
 It isn't magic. PHP's `zlib` and regex engines are C underneath, and YetiPDF hands them nearly all of the heavy lifting. It also skips work that a text extractor has no use for. Every line, fill and colour change on a page gets stepped over before PHP ever sees it, and images are never decompressed at all.
 
-If you can turn on PHP's JIT, do. The PostgreSQL manual drops to 1.28s with it.
+If you can turn on PHP's JIT, do. The PostgreSQL manual drops to 0.80s with it.
 
 Memory matters just as much if you're running on a 256MB host:
 
 | Document | YetiPDF | pdftotext | PrinsFrank | smalot |
 |---|---|---|---|---|
-| PostgreSQL 16 manual | 39MB | 72MB | 48MB | 430MB |
+| PostgreSQL 16 manual | 31MB | 72MB | 48MB | 430MB |
 | NIST SP 800-53 | 18MB | 71MB | 71MB | 193MB |
-| IRS Publication 17 | 20MB | 29MB | 82MB | 193MB |
-| Pro Git | 26MB | 17MB | 27MB | 779MB |
+| IRS Publication 17 | 18MB | 29MB | 82MB | 193MB |
+| Pro Git | 28MB | 17MB | 27MB | 779MB |
 
 Those figures are for pulling the whole document into one string. Read it a page at a time, as in the example below, and the PostgreSQL manual peaks at 25MB.
 
@@ -48,7 +48,7 @@ I tested against 218 PDFs. Twenty are ordinary documents: research papers, tax f
 | Words recovered | **99.8%** | 88.7% | 93.9% |
 | Documents scoring 95% or better | **196** | 113 | 120 |
 | Ordinary documents scoring 95% or better | **19 of 20** | 14 | 13 |
-| Time for all 218 | **5.6s** | 22.5s | 147.2s |
+| Time for all 218 | **4.5s** | 22.5s | 147.2s |
 
 Two things about that table. `pdftotext` is a reference and not the truth, so when YetiPDF and `pdftotext` disagree and YetiPDF is the one that's right, it still loses points. The one ordinary document under 95% is a NIST standard where `pdftotext` turns the small-caps heading into "dvanced ncryption tandard". And most of the files that score badly are ones nothing can read, because the PDF never says which character each glyph stands for.
 
@@ -170,7 +170,7 @@ php benchmarks/diff.php some.pdf                   # which words differ from pdf
 
 You'll need `pdftotext` installed, since it's the reference. If you find a PDF that **YetiPDF** reads badly, `diff.php` shows exactly which words went missing, and I'd love to see it in an issue.
 
-The numbers above came from an Apple Silicon Mac. The single-document timings are each tool run alone, best of three (smalot got one run, for obvious reasons). The 218-file totals add up the per-file extraction times, with six files running at once. YetiPDF's figures were last refreshed on PHP 8.4.25, after the memory and right-to-left work; the other tools' figures are from the original benchmark run.
+The numbers above came from an Apple Silicon Mac. The single-document timings are each tool run alone, best of three (smalot got one run, for obvious reasons). The 218-file totals add up the per-file extraction times, with six files running at once. YetiPDF's figures were last refreshed on PHP 8.4.27, after the tokenizer, font, and annotation optimization pass; the other tools' figures are from the original benchmark run.
 
 ## Tests
 

@@ -37,6 +37,11 @@ final class CoreTest extends TestCase
         $p = 0;
         $v = Lexer::value('<< /A 1 ) /B [1 2 > /C 3 >>', $p);
         $this->assertSame(1, $v['A']);
+
+        // Malformed signed-digit tokens consume the whole numeric span, matching Lexer::number().
+        $p = 0;
+        $this->assertSame(1, Lexer::value('1+2 /Next', $p));
+        $this->assertSame(3, $p);
     }
 
     public function testIndirectStream(): void

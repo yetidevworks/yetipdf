@@ -779,4 +779,85 @@ final class HardeningTest extends TestCase
         $this->assertCount(2, $file->warnings);
         $this->assertSame(1, count(array_filter($file->warnings, static fn(string $w): bool => str_contains($w, 'Stream 5'))));
     }
+
+    public function testRebuildAfterBadXrefStartsWithAFreshParserBudget(): void
+    {
+        // An unrelated padded /XRef dictionary hits the parser cap during rebuild(), and the retried lookup must still read the page.
+        $pad = '';
+        for ($i = 0; $i < 8200; $i++) {
+            $pad .= " /K$i $i";
+        }
+        $pdf = PdfBuilder::build(['BT /F1 12 Tf 72 720 Td (A) Tj ET'], [], [
+            99 => PdfBuilder::stream('', false, "/Type /XRef$pad"),
+        ]);
+        // Corrupt the xref offset of object 31 (the page content stream) so File::get(31) triggers rebuild().
+        $pdf = preg_replace('/(\n)(\d{10} 00000 n \n)(?=\d{10} 00000 n \ntrailer)/', '$10000000001 00000 n ' . "\n", $pdf, 1) ?? $pdf;
+        // Ensure the content stream itself has a wrong offset by pointing entry 31 to byte 1.
+        $lines = explode("\n", $pdf);
+        $inXref = false;
+        $idx = 0;
+        foreach ($lines as $k => $line) {
+            if ($line === 'xref') {
+                $inXref = true;
+                continue;
+            }
+            if ($inXref && preg_match('/^(\d+) (\d+)$/', $line, $m)) {
+                $idx = (int)$m[1];
+                continue;
+            }
+            if ($inXref && preg_match('/^\d{10} \d{5} [nf] ?$/', $line)) {
+                if ($idx === 31) {
+                    $lines[$k] = '0000000001 00000 n ';
+                }
+                $idx++;
+            }
+        }
+        $broken = implode("\n", $lines);
+        $doc = new Document(new File($broken, '', 4 << 20), new Options());
+
+        $this->assertSame('A', $doc->text());
+    }
+
+    public function testColdObjectStreamLoadedForAnnotationRespectsParserBudget(): void
+    {
+        $pad = '';
+        for ($i = 0; $i < 8200; $i++) {
+            $pad .= " /K$i $i";
+        }
+        $annot = '<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] >>';
+        $objStmBody = "50 0\n$annot";
+        $objects = [
+            1 => '<< /Type /Catalog /Pages 2 0 R >>',
+            2 => '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            3 => '<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R /Annots [50 0 R] >>',
+            4 => "<< /Length 28 >>\nstream\nBT /F1 12 Tf 72 720 Td (ok) Tj ET\nendstream",
+            5 => '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+            6 => "<< /Type /ObjStm /N 1 /First 5 /Length " . strlen($objStmBody) . "$pad >>\nstream\n$objStmBody\nendstream",
+        ];
+        $pdf = "%PDF-1.5\n";
+        $offsets = [];
+        foreach ($objects as $num => $body) {
+            $offsets[$num] = strlen($pdf);
+            $pdf .= "$num 0 obj\n$body\nendobj\n";
+        }
+        // Build an XRef stream pointing object 50 into ObjStm 6 so ObjStm 6 stays cold until appearances() runs.
+        $rows = '';
+        for ($i = 1; $i <= 6; $i++) {
+            $rows .= "\x01" . pack('N', $offsets[$i]) . "\x00";
+        }
+        $rows .= "\x02" . pack('N', 6) . "\x00";
+        $at = strlen($pdf);
+        $pdf .= "7 0 obj\n<< /Type /XRef /Size 51 /W [1 4 1] /Index [1 6 50 1] /Root 1 0 R /Length " . strlen($rows) . " >>\nstream\n$rows\nendstream\nendobj\nstartxref\n$at\n%%EOF\n";
+
+        $doc = new Document(new File($pdf, '', 4 << 20), new Options());
+
+        $this->assertSame('ok', $doc->text());
+        $this->assertNotEmpty(self::notes($doc, 'more parts than fit'));
+    }
+
+    public function testCombinedTfWithHugeNumberRunTrimsToTail(): void
+    {
+        $content = 'BT /F1 ' . str_repeat('1 ', 30000) . '12 Tf 72 720 Td (sized) Tj ET';
+        $this->assertSame('sized', YetiPdf::parse(PdfBuilder::build([$content]))->text());
+    }
 }

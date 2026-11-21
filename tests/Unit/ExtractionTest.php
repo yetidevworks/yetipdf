@@ -285,4 +285,42 @@ final class ExtractionTest extends TestCase
 
         $this->assertSame("Body\nAPPROVED", YetiPdf::parse($pdf)->text());
     }
+
+    public function testUnusualWhitespaceCommentsAndEscapesInContentStreams(): void
+    {
+        // Vertical tab and NUL inside TJ, comments between operands and Tj/Tf/Do, and separate octal escapes.
+        $form = PdfBuilder::stream('BT /F1 10 Tf 0 0 Td (from form) Tj ET', false, '/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /F1 10 0 R >> >>');
+        $content = "BT /F1 %font\n 10 Tf 72 720 Td [(A)\x0B(B)] TJ 0 -14 Td [(C)\0(D)] TJ "
+            . "0 -14 Td (E) %comment\n Tj 0 -14 Td [(\\1) 0 (23)] TJ ET "
+            . "q 1 0 0 1 72 600 cm /Fm1 %form\n Do Q";
+        $pdf = PdfBuilder::build([$content], [], [100 => $form]);
+        $pdf = str_replace('/Resources << /Font << /F1 10 0 R >> >> /Contents', '/Resources << /Font << /F1 10 0 R >> /XObject << /Fm1 100 0 R >> >> /Contents', $pdf);
+
+        $this->assertSame("AB\nCD\nE\n23\nfrom form", YetiPdf::parse($pdf)->text());
+    }
+
+    public function testFakeBoldAfterWordGapTjAndIncompleteTmAfterKernedTj(): void
+    {
+        // Fake bold overprint on the last fragment of a word-spaced TJ must still be suppressed.
+        $overprint = 'BT /F1 10 Tf 1 0 0 1 0 20 Tm [(A)-200(B)] TJ 1 0 0 1 8.67 20 Tm (B) Tj ET';
+        $this->assertSame('A B', YetiPdf::parse(PdfBuilder::build([$overprint]))->text());
+
+        // An incomplete Tm ("1 Tm") does not reset te/tf, so prior TJ kerning must still apply before "(D) Tj".
+        $incompleteTm = 'BT /F1 10 Tf 0 20 Td [(A)-97(B)-97(C)] TJ 1 Tm (D) Tj ET';
+        $this->assertSame('ABC D', YetiPdf::parse(PdfBuilder::build([$incompleteTm]))->text());
+    }
+
+    public function testStampAnnotationsWithEndobjStringAndCommentedArrayAreStillRead(): void
+    {
+        $form = '/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /F1 10 0 R >> >>';
+        $pdf = PdfBuilder::build(['BT /F1 12 Tf 72 720 Td (Body) Tj ET'], [], [
+            100 => '<< /Type /Annot /Subtype /Stamp /Contents (endobj) /Rect [72 600 172 620] /AP << /N 101 0 R >> >>',
+            101 => PdfBuilder::stream('BT /F1 10 Tf 2 5 Td (STAMP1) Tj ET', false, $form),
+            102 => "<< /Type /Annot /Subtype /Stamp /Fake [ % ] >>\n0 ] /Rect [72 560 172 580] /AP << /N 103 0 R >> >>",
+            103 => PdfBuilder::stream('BT /F1 10 Tf 2 5 Td (STAMP2) Tj ET', false, $form),
+        ]);
+        $pdf = str_replace('/Contents 31 0 R', '/Contents 31 0 R /Annots [100 0 R 102 0 R]', $pdf);
+
+        $this->assertSame("Body\nSTAMP1\nSTAMP2", YetiPdf::parse($pdf)->text());
+    }
 }

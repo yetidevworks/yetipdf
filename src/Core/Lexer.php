@@ -88,9 +88,33 @@ final class Lexer
         }
 
         if ($c >= '0' && $c <= '9') {
-            if (preg_match('/\G(\d{1,10})[\0\t\n\f\r ]+(\d{1,10})[\0\t\n\f\r ]+R(?![A-Za-z0-9])/', $d, $m, 0, $p)) {
-                $p += strlen($m[0]);
-                return new Ref((int)$m[1], (int)$m[2]);
+            $n1 = strspn($d, '0123456789', $p);
+            if ($n1 <= 10) {
+                $q = $p + $n1;
+                $ws1 = strspn($d, self::WS, $q);
+                if ($ws1 > 0) {
+                    $q += $ws1;
+                    $n2 = strspn($d, '0123456789', $q);
+                    if ($n2 > 0 && $n2 <= 10) {
+                        $q += $n2;
+                        $ws2 = strspn($d, self::WS, $q);
+                        if ($ws2 > 0 && ($d[$q + $ws2] ?? '') === 'R') {
+                            $after = $d[$q + $ws2 + 1] ?? '';
+                            if ($after === '' || !ctype_alnum($after)) {
+                                $num = (int)substr($d, $p, $n1);
+                                $gen = (int)substr($d, $p + $n1 + $ws1, $n2);
+                                $p = $q + $ws2 + 1;
+                                return new Ref($num, $gen);
+                            }
+                        }
+                    }
+                }
+            }
+            $afterNum = $d[$p + $n1] ?? '';
+            if ($afterNum !== '.' && $afterNum !== '+' && $afterNum !== '-' && $n1 < 18) {
+                $val = (int)substr($d, $p, $n1);
+                $p += $n1;
+                return $val;
             }
             return self::number($d, $p);
         }
@@ -200,6 +224,235 @@ final class Lexer
             $dict[$key] = self::value($d, $p, $depth + 1);
         }
         return $dict;
+    }
+
+    /**
+     * Quick scan of an annotation dictionary without building PHP arrays or objects.
+     * Returns true only when it is certain the annotation will be skipped by Document::appearances():
+     * it is /Link or /Popup, has Hidden/NoView flags set, or carries no /AP entry.
+     * Any ambiguity, indirect /Subtype or /F, escaped key, or unexpected syntax returns false so the caller parses normally.
+     */
+    public static function isSkippedAnnotation(string $d, int $p): bool
+    {
+        self::skip($d, $p);
+        $len = strlen($d);
+        if ($p + 1 >= $len || $d[$p] !== '<' || $d[$p + 1] !== '<') {
+            return false;
+        }
+        $p += 2;
+        $hasAp = false;
+        $skippedSubtype = false;
+        $hidden = false;
+        $steps = 0;
+
+        while ($p < $len) {
+            if (++$steps > 256) {
+                return false;
+            }
+            $p += strspn($d, self::WS, $p);
+            if ($p >= $len) {
+                return false;
+            }
+            if ($d[$p] === '%') {
+                self::skip($d, $p);
+                if ($p >= $len) {
+                    return false;
+                }
+            }
+            $c = $d[$p];
+            if ($c === '>') {
+                if (($d[$p + 1] ?? '') !== '>') {
+                    return false;
+                }
+                return $skippedSubtype || $hidden || !$hasAp;
+            }
+            if ($c !== '/') {
+                return false;
+            }
+            $n = strcspn($d, self::DELIM, $p + 1);
+            $key = substr($d, $p + 1, $n);
+            $p += $n + 1;
+            if (str_contains($key, '#')) {
+                return false;
+            }
+            $p += strspn($d, self::WS, $p);
+            if ($p >= $len) {
+                return false;
+            }
+            if ($d[$p] === '%') {
+                self::skip($d, $p);
+                if ($p >= $len) {
+                    return false;
+                }
+            }
+            if ($key === 'AP') {
+                $hasAp = true;
+            } elseif ($key === 'Subtype') {
+                if ($d[$p] === '/') {
+                    $vn = strcspn($d, self::DELIM, $p + 1);
+                    $val = substr($d, $p + 1, $vn);
+                    if (str_contains($val, '#')) {
+                        return false;
+                    }
+                    $skippedSubtype = ($val === 'Link' || $val === 'Popup');
+                    $p += $vn + 1;
+                    continue;
+                }
+                $skippedSubtype = false;
+            } elseif ($key === 'F') {
+                $ch = $d[$p];
+                if ($ch >= '0' && $ch <= '9') {
+                    $vn = strspn($d, '0123456789', $p);
+                    $q = $p + $vn;
+                    $ws1 = strspn($d, self::WS, $q);
+                    $next = $d[$q + $ws1] ?? '';
+                    // Only interpret direct integers; indirect references fall through to skipValue.
+                    if ($ws1 === 0 || $next < '0' || $next > '9') {
+                        $hidden = (((int)substr($d, $p, $vn)) & 0x22) !== 0;
+                        $p = $q;
+                        continue;
+                    }
+                }
+                $hidden = false;
+            }
+            if (!self::skipValue($d, $p, $len, 0)) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /** Advances $p past one PDF value without allocating PHP structures; returns false on syntax ambiguity or deep nesting. */
+    private static function skipValue(string $d, int &$p, int $len, int $depth): bool
+    {
+        if ($depth > 16 || $p >= $len) {
+            return false;
+        }
+        $c = $d[$p];
+        if ($c === '/') {
+            $p += 1 + strcspn($d, self::DELIM, $p + 1);
+            return true;
+        }
+        if ($c === '(') {
+            $i = $p + 1;
+            $parens = 1;
+            while ($i < $len) {
+                $i += strcspn($d, '()\\', $i);
+                if ($i >= $len) {
+                    return false;
+                }
+                $ch = $d[$i];
+                if ($ch === '\\') {
+                    $i += 2;
+                } elseif ($ch === '(') {
+                    $parens++;
+                    $i++;
+                } elseif (--$parens === 0) {
+                    $p = $i + 1;
+                    return true;
+                } else {
+                    $i++;
+                }
+            }
+            return false;
+        }
+        if ($c === '<') {
+            if (($d[$p + 1] ?? '') === '<') {
+                $p += 2;
+                while ($p < $len) {
+                    $p += strspn($d, self::WS, $p);
+                    if ($p >= $len) {
+                        return false;
+                    }
+                    if ($d[$p] === '%') {
+                        self::skip($d, $p);
+                        if ($p >= $len) {
+                            return false;
+                        }
+                    }
+                    if ($d[$p] === '>' && ($d[$p + 1] ?? '') === '>') {
+                        $p += 2;
+                        return true;
+                    }
+                    if (!self::skipValue($d, $p, $len, $depth + 1)) {
+                        return false;
+                    }
+                }
+                return false;
+            }
+            $end = strpos($d, '>', $p + 1);
+            if ($end === false) {
+                return false;
+            }
+            $p = $end + 1;
+            return true;
+        }
+        if ($c === '[') {
+            $span = strcspn($d, '[]()<>\%', $p + 1);
+            if ($p + 1 + $span < $len && $d[$p + 1 + $span] === ']') {
+                $p += $span + 2;
+                return true;
+            }
+            $p++;
+            while ($p < $len) {
+                $p += strspn($d, self::WS, $p);
+                if ($p >= $len) {
+                    return false;
+                }
+                if ($d[$p] === '%') {
+                    self::skip($d, $p);
+                    if ($p >= $len) {
+                        return false;
+                    }
+                }
+                if ($d[$p] === ']') {
+                    $p++;
+                    return true;
+                }
+                if (!self::skipValue($d, $p, $len, $depth + 1)) {
+                    return false;
+                }
+            }
+            return false;
+        }
+        if ($c >= '0' && $c <= '9') {
+            $n1 = strspn($d, '0123456789', $p);
+            if ($n1 <= 10) {
+                $q = $p + $n1;
+                $ws1 = strspn($d, self::WS, $q);
+                if ($ws1 > 0) {
+                    $q += $ws1;
+                    $n2 = strspn($d, '0123456789', $q);
+                    if ($n2 > 0 && $n2 <= 10) {
+                        $q += $n2;
+                        $ws2 = strspn($d, self::WS, $q);
+                        if ($ws2 > 0 && ($d[$q + $ws2] ?? '') === 'R') {
+                            $after = $d[$q + $ws2 + 1] ?? '';
+                            if ($after === '' || !ctype_alnum($after)) {
+                                $p = $q + $ws2 + 1;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            $p += strspn($d, '+-.0123456789', $p);
+            return true;
+        }
+        if ($c === '-' || $c === '+' || $c === '.') {
+            $n = strspn($d, '+-.0123456789', $p);
+            if ($n === 0) {
+                return false;
+            }
+            $p += $n;
+            return true;
+        }
+        $n = strcspn($d, self::DELIM, $p);
+        if ($n === 0) {
+            return false;
+        }
+        $p += $n;
+        return true;
     }
 
     private static function number(string $d, int &$p): int|float

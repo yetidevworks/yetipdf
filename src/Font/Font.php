@@ -76,7 +76,7 @@ final class Font
     public int $sp = 0;
 
     /** @var array<string, array{0: string, 1: float, 2: int, 3: int}> */
-    private array $memo = [];
+    public array $memo = [];
     /** @var array<int, string> composite code => text */
     private array $codeText = [];
     /** @var array<int|string, string>|null byte (simple) or code (composite) => text as drawn() gives it */
@@ -89,6 +89,41 @@ final class Font
     private ?int $longest = null;
     /** @var array<int, float> composite code => width, for fonts with $widthIndex */
     private array $widthCache = [];
+    /** True once a simple font's $widths (0..255), $fixedWidth, $identity and $rtl have been prepared. */
+    private bool $prepared = false;
+    /** Fixed width (unscaled) when all 256 codes in a simple font share the same width, else null. */
+    private ?float $fixedWidth = null;
+    /** Single-byte codes that map to themselves in a simple font (for fast strspn passthrough). */
+    public string $identity = '';
+
+    private function prepareSimple(): void
+    {
+        $dw = $this->defaultWidth;
+        $widths = $this->widths;
+        $first = (float)($widths[0] ?? $dw);
+        $fixed = $first;
+        $id = '';
+        $map = $this->map;
+        for ($c = 0; $c < 256; $c++) {
+            $w = (float)($widths[$c] ?? $dw);
+            $widths[$c] = $w;
+            if ($fixed !== null && $w !== $first) {
+                $fixed = null;
+            }
+            $b = chr($c);
+            if (!isset($map[$b])) {
+                $id .= $b;
+            }
+        }
+        $this->widths = $widths;
+        $this->fixedWidth = $fixed;
+        $this->identity = $id;
+        $this->prepared = true;
+        if (!$this->rtlKnown) {
+            $this->rtlKnown = true;
+            $this->rtl = (bool)preg_match(Utf::RIGHT_TO_LEFT, implode('', $map));
+        }
+    }
 
     public function decode(string $s): string
     {
@@ -98,25 +133,43 @@ final class Font
         }
 
         if ($this->simple) {
-            $w = 0.0;
-            $sp = 0;
-            foreach (count_chars($s, 1) as $code => $count) {
-                $w += ($this->widths[$code] ?? $this->defaultWidth) * $count;
-                if ($code === 32) {
-                    $sp = $count;
+            $len = strlen($s);
+            if (!$this->prepared) {
+                $this->prepareSimple();
+            }
+            if ($this->fixedWidth !== null) {
+                $w = $len * $this->fixedWidth;
+                $sp = substr_count($s, ' ');
+            } elseif ($len <= 20) {
+                $dw = $this->widths;
+                $w = 0.0;
+                $sp = 0;
+                for ($i = 0; $i < $len; $i++) {
+                    $c = ord($s[$i]);
+                    $w += $dw[$c];
+                    if ($c === 32) {
+                        $sp++;
+                    }
+                }
+            } else {
+                $dw = $this->widths;
+                $w = 0.0;
+                $sp = 0;
+                foreach (count_chars($s, 1) as $code => $count) {
+                    $w += $dw[$code] * $count;
+                    if ($code === 32) {
+                        $sp = $count;
+                    }
                 }
             }
             $this->w = $w * $this->scale;
-            $this->n = strlen($s);
+            $this->n = $len;
             $this->sp = $sp;
-            if (isset($s[self::PIECE])) {
+            if ($len > self::PIECE) {
                 $s = $this->within($s);
+                $len = strlen($s);
             }
-            $text = strtr($s, $this->map);
-            if (!$this->rtlKnown) {
-                $this->rtlKnown = true;
-                $this->rtl = (bool)preg_match(Utf::RIGHT_TO_LEFT, implode('', $this->map));
-            }
+            $text = ($this->identity !== '' && strspn($s, $this->identity) === $len) ? $s : strtr($s, $this->map);
         } elseif ($this->charset !== null) {
             $text = (string)@mb_convert_encoding($s, 'UTF-8', $this->charset);
             $this->n = mb_strlen($text, 'UTF-8');
@@ -272,10 +325,19 @@ final class Font
 
         if ($this->codespaces === []) {
             $codes = $this->codeBytes === 1 ? unpack('C*', $s) : unpack('n*', strlen($s) & 1 ? $s . "\0" : $s);
-            foreach ($codes ?: [] as $code) {
-                $text .= $this->codeText[$code] ?? $this->lookup($code);
-                $w += $widths[$code] ?? ($ranged ? $this->rangeWidth($code) : $dw);
-                $n++;
+            if ($codes) {
+                $n = count($codes);
+                if (!$ranged) {
+                    foreach ($codes as $code) {
+                        $text .= $this->codeText[$code] ?? $this->lookup($code);
+                        $w += $widths[$code] ?? $dw;
+                    }
+                } else {
+                    foreach ($codes as $code) {
+                        $text .= $this->codeText[$code] ?? $this->lookup($code);
+                        $w += $widths[$code] ?? $this->rangeWidth($code);
+                    }
+                }
             }
             if ($this->codeBytes === 1) {
                 $sp = substr_count($s, ' ');

@@ -28,15 +28,23 @@ final class Memory
         return $limit !== null && $limit - memory_get_usage(true) < max(4 << 20, min(16 << 20, $limit >> 3));
     }
 
+    private static ?string $cachedRaw = null;
+    private static ?int $cachedLimit = null;
+
     /** PHP's memory_limit in bytes, or null when there is none. */
     private static function limit(): ?int
     {
-        $raw = trim((string)ini_get('memory_limit'));
-        $bytes = (int)$raw;
-        if ($bytes <= 0) {
-            return null;
+        $raw = (string)ini_get('memory_limit');
+        if ($raw === self::$cachedRaw) {
+            return self::$cachedLimit;
         }
-        return match (strtolower(substr($raw, -1))) {
+        self::$cachedRaw = $raw;
+        $trimmed = trim($raw);
+        $bytes = (int)$trimmed;
+        if ($bytes <= 0) {
+            return self::$cachedLimit = null;
+        }
+        return self::$cachedLimit = match (strtolower(substr($trimmed, -1))) {
             'g' => $bytes << 30,
             'm' => $bytes << 20,
             'k' => $bytes << 10,

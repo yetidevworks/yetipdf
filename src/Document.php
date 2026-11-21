@@ -76,11 +76,17 @@ final class Document
 
     public function text(string $separator = "\n\n"): string
     {
-        $out = [];
+        $out = '';
+        $first = true;
         foreach ($this->pages() as $text) {
-            $out[] = $text;
+            if ($first) {
+                $first = false;
+            } else {
+                $out .= $separator;
+            }
+            $out .= $text;
         }
-        return implode($separator, $out);
+        return $out;
     }
 
     public function pageCount(): int
@@ -184,7 +190,7 @@ final class Document
             if (count($out) >= $this->interpreter->maxFormRuns) {
                 break;
             }
-            $annot = $file->dict($ref);
+            $annot = $file->annotationDict($ref);
             $subtype = $annot['Subtype'] ?? null;
             if ($annot === null || $subtype === '/Link' || $subtype === '/Popup') {
                 continue;
@@ -210,16 +216,29 @@ final class Document
         return $out;
     }
 
+    private const CONTROL = "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F\x7F";
+
     private function clean(string $text): string
     {
         if ($text === '') {
             return '';
         }
-        if ($this->options->expandLigatures) {
+        if ($this->options->expandLigatures && strpbrk($text, "\xC2\xE2\xEF") !== false) {
             $text = strtr($text, self::LIGATURES);
         }
         // Control characters out, runs of spaces down to one, spaces at line ends gone.
-        $text = preg_replace(['/[\x00-\x09\x0B-\x1F\x7F]+/', '/ {2,}/', '/ *\n */', '/\n{3,}/'], [' ', ' ', "\n", "\n\n"], $text) ?? $text;
+        if (strcspn($text, self::CONTROL) !== strlen($text)) {
+            $text = preg_replace('/[\x00-\x09\x0B-\x1F\x7F]+/', ' ', $text) ?? $text;
+        }
+        if (str_contains($text, '  ')) {
+            $text = preg_replace('/ {2,}/', ' ', $text) ?? $text;
+        }
+        if (str_contains($text, " \n") || str_contains($text, "\n ")) {
+            $text = preg_replace('/ *\n */', "\n", $text) ?? $text;
+        }
+        if (str_contains($text, "\n\n\n")) {
+            $text = preg_replace('/\n{3,}/', "\n\n", $text) ?? $text;
+        }
         return trim($text);
     }
 
