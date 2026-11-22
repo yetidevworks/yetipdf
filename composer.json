@@ -35,7 +35,7 @@
             "YetiPdf\\Read\\Tests\\": "tests/"
         }
     },
-    "bin": ["bin/yetipdf"],
+    "bin": ["bin/yetipdf-read", "bin/yetipdf"],
     "scripts": {
         "test": "phpunit"
     },

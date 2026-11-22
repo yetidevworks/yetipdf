@@ -1,8 +1,8 @@
 #!/bin/sh
 # Scores text extraction against pdftotext (poppler) over the corpus.
 #
-#   benchmarks/bench.sh                      yetipdf only
-#   benchmarks/bench.sh yetipdf prinsfrank smalot
+#   benchmarks/bench.sh                      yetipdf-read only
+#   benchmarks/bench.sh yetipdf-read prinsfrank smalot
 #
 # pdftotext is the reference: "recall" is the share of its words a library also found, and a document
 # that fails counts as zero. Only PDFs where pdftotext finds at least 10 words are scored.
@@ -11,7 +11,7 @@ set -e
 cd "$(dirname "$0")"
 command -v pdftotext >/dev/null || { echo "pdftotext (poppler) is needed as the reference" >&2; exit 1; }
 [ -d corpus ] || { echo "No corpus yet: run benchmarks/fetch-corpus.sh" >&2; exit 1; }
-LIBS="${*:-yetipdf}"
+LIBS="${*:-yetipdf-read}"
 JOBS="${JOBS:-6}"
 mkdir -p out
 

@@ -10,9 +10,12 @@ use YetiPdf\Read\Exception\InvalidPdfException;
 /**
  * Entry point.
  *
- *     foreach (YetiPdf::open('manual.pdf')->pages() as $number => $text) { ... }
+ *     foreach (YetiPdfRead::open('manual.pdf')->pages() as $number => $text) { ... }
+ *
+ * Named YetiPdfRead since 1.3.1, so it can be imported next to YetiPDF Write's YetiPdfWrite
+ * without renaming either one.
  */
-final class YetiPdf
+final class YetiPdfRead
 {
     /**
      * @throws Exception\InvalidPdfException when the file is missing or is not a PDF
@@ -38,7 +41,11 @@ final class YetiPdf
     }
 }
 
-// The name this class had before 1.3 (yetidevworks/yetipdf), kept until 2.0: see legacy.php.
+// The names this class had before 1.3.1, kept until 2.0 (deprecated): YetiPdf\YetiPdf up to 1.2
+// (yetidevworks/yetipdf) and YetiPdf\Read\YetiPdf in 1.3.0. See legacy.php.
 if (!\class_exists('YetiPdf\\YetiPdf', false)) {
-    \class_alias(YetiPdf::class, 'YetiPdf\\YetiPdf', false);
+    \class_alias(YetiPdfRead::class, 'YetiPdf\\YetiPdf', false);
+}
+if (!\class_exists('YetiPdf\\Read\\YetiPdf', false)) {
+    \class_alias(YetiPdfRead::class, 'YetiPdf\\Read\\YetiPdf', false);
 }

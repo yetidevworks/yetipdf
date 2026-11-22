@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use YetiPdf\Read\Content\Bidi;
 use YetiPdf\Read\Tests\PdfBuilder;
-use YetiPdf\Read\YetiPdf;
+use YetiPdf\Read\YetiPdfRead;
 
 final class RightToLeftTest extends TestCase
 {
@@ -87,7 +87,7 @@ final class RightToLeftTest extends TestCase
         [$fonts, $extra] = self::hebrewFont();
         // "cba fed" is how the two words look on the page; the reader starts at the right.
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td (fed cba) Tj ET'], $fonts, $extra);
-        $this->assertSame('אבג דהו', YetiPdf::parse($pdf)->text());
+        $this->assertSame('אבג דהו', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testPiecesArePlacedByPositionWhateverOrderTheyAreDrawnIn(): void
@@ -97,7 +97,7 @@ final class RightToLeftTest extends TestCase
         $rightFirst = 'BT /F1 10 Tf 1 0 0 1 112 720 Tm (cba) Tj 1 0 0 1 92 720 Tm (12) Tj 1 0 0 1 72 720 Tm (fed) Tj ET';
         $leftFirst = 'BT /F1 10 Tf 1 0 0 1 72 720 Tm (f) Tj (e) Tj (d) Tj 1 0 0 1 92 720 Tm (1) Tj (2) Tj 1 0 0 1 112 720 Tm (c) Tj (b) Tj (a) Tj ET';
         foreach ([$rightFirst, $leftFirst] as $content) {
-            $this->assertSame('אבג 12 דהו', YetiPdf::parse(PdfBuilder::build([$content], $fonts, $extra))->text());
+            $this->assertSame('אבג 12 דהו', YetiPdfRead::parse(PdfBuilder::build([$content], $fonts, $extra))->text());
         }
     }
 
@@ -106,7 +106,7 @@ final class RightToLeftTest extends TestCase
         [$fonts, $extra] = self::hebrewFont();
         // Each letter is 5 wide and the spacing takes 10 off, so the string is in reading order and runs to the left.
         $pdf = PdfBuilder::build(['BT /F1 10 Tf -10 Tc 1 0 0 1 200 720 Tm (abc def) Tj ET'], $fonts, $extra);
-        $this->assertSame('אבג דהו', YetiPdf::parse($pdf)->text());
+        $this->assertSame('אבג דהו', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testLineDrawnInTwoGoesIsJoined(): void
@@ -117,7 +117,7 @@ final class RightToLeftTest extends TestCase
             'BT /F1 10 Tf 1 0 0 1 72 720 Tm (fed ) Tj 1 0 0 1 72 700 Tm (cba ) Tj'
             . ' 1 0 0 1 92 720 Tm (cba) Tj 1 0 0 1 92 700 Tm (fed) Tj ET',
         ], $fonts, $extra);
-        $this->assertSame("אבג דהו\nדהו אבג", YetiPdf::parse($pdf)->text());
+        $this->assertSame("אבג דהו\nדהו אבג", YetiPdfRead::parse($pdf)->text());
     }
 
     public function testLettersOfOneGlyphStayInReadingOrder(): void
@@ -126,7 +126,7 @@ final class RightToLeftTest extends TestCase
         // The glyph for alef and bet together is drawn to the left of gimel, so it is read after it. A font
         // lists the letters of such a glyph in reading order already, and they must not be turned around with the line.
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td (gc) Tj ET'], $fonts, $extra);
-        $this->assertSame('ג' . 'א' . 'ב', YetiPdf::parse($pdf)->text());
+        $this->assertSame('ג' . 'א' . 'ב', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testLetterDrawnOnTopOfItsVowelMarkLeavesNoGap(): void
@@ -137,7 +137,7 @@ final class RightToLeftTest extends TestCase
         $pdf = PdfBuilder::build([
             'BT /F1 10 Tf 1 0 0 1 72 720 Tm (c) Tj -5 Tc 1 0 0 1 77 720 Tm (hb) Tj 0 Tc 1 0 0 1 82 720 Tm (a) Tj ET',
         ], $fonts, $extra);
-        $this->assertSame('א' . 'ב' . "\u{05B8}" . 'ג', YetiPdf::parse($pdf)->text());
+        $this->assertSame('א' . 'ב' . "\u{05B8}" . 'ג', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testVowelMarkDrawnOnItsOwnJoinsTheLetterItSitsOn(): void
@@ -148,7 +148,7 @@ final class RightToLeftTest extends TestCase
             $pdf = PdfBuilder::build([
                 "BT /F1 10 Tf 1 0 0 1 72 720 Tm (c) Tj 1 0 0 1 $x 720 Tm (h) Tj 1 0 0 1 77 720 Tm (b) Tj 1 0 0 1 82 720 Tm (a) Tj ET",
             ], $fonts, $extra);
-            $this->assertSame('א' . 'ב' . "\u{05B8}" . 'ג', YetiPdf::parse($pdf)->text(), "mark at $x");
+            $this->assertSame('א' . 'ב' . "\u{05B8}" . 'ג', YetiPdfRead::parse($pdf)->text(), "mark at $x");
         }
     }
 
@@ -157,7 +157,7 @@ final class RightToLeftTest extends TestCase
         [$fonts, $extra] = self::hebrewFont();
         // At 30% width each letter moves on by 0.15 of the font size, which is closer than bold's second copy usually sits.
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 30 Tz 1 0 0 1 72 720 Tm (c) Tj (c) Tj (c) Tj (b) Tj ET'], $fonts, $extra);
-        $this->assertSame('ב' . 'ג' . 'ג' . 'ג', YetiPdf::parse($pdf)->text());
+        $this->assertSame('ב' . 'ג' . 'ג' . 'ג', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testNarrowLetterDrawnTwiceIsReadOnce(): void
@@ -167,7 +167,7 @@ final class RightToLeftTest extends TestCase
         $pdf = PdfBuilder::build([
             'BT /F1 10 Tf 40 Tz 1 0 0 1 72 720 Tm (fed) Tj 1 0 0 1 76.2 720 Tm (d) Tj 1 0 0 1 78 720 Tm (cba) Tj ET',
         ], $fonts, $extra);
-        $this->assertSame('אבגדהו', YetiPdf::parse($pdf)->text());
+        $this->assertSame('אבגדהו', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testSpaceDrawnOverALetterDoesNotSplitTheWord(): void
@@ -175,11 +175,11 @@ final class RightToLeftTest extends TestCase
         [$fonts, $extra] = self::hebrewFont();
         // Gimel is at 72 to 77 and bet starts at 77. The space between them in the file is drawn at 73, on top of gimel.
         $onTop = 'BT /F1 10 Tf 1 0 0 1 72 720 Tm (c) Tj 1 0 0 1 73 720 Tm ( ) Tj 1 0 0 1 77 720 Tm (b) Tj ET';
-        $this->assertSame('ב' . 'ג', YetiPdf::parse(PdfBuilder::build([$onTop], $fonts, $extra))->text());
+        $this->assertSame('ב' . 'ג', YetiPdfRead::parse(PdfBuilder::build([$onTop], $fonts, $extra))->text());
 
         // Here bet starts at 77.8. That is less than a word gap, but with a space drawn there it is one.
         $between = 'BT /F1 10 Tf 1 0 0 1 72 720 Tm (c) Tj 1 0 0 1 76 720 Tm ( ) Tj 1 0 0 1 77.8 720 Tm (b) Tj ET';
-        $this->assertSame('ב' . ' ' . 'ג', YetiPdf::parse(PdfBuilder::build([$between], $fonts, $extra))->text());
+        $this->assertSame('ב' . ' ' . 'ג', YetiPdfRead::parse(PdfBuilder::build([$between], $fonts, $extra))->text());
     }
 
     public function testLongPageKeepsItsLinesInPlace(): void
@@ -205,7 +205,7 @@ final class RightToLeftTest extends TestCase
         $content .= '/F1 10 Tf 1 0 0 1 320 100 Tm (cba) Tj /F2 10 Tf 1 0 0 1 72 1000 Tm (The end) Tj ET';
         $lines[] = 'The end';
 
-        $this->assertSame(implode("\n", $lines), YetiPdf::parse(PdfBuilder::build([$content], $fonts, $extra))->text());
+        $this->assertSame(implode("\n", $lines), YetiPdfRead::parse(PdfBuilder::build([$content], $fonts, $extra))->text());
     }
 
     public function testLineTooLongToBeALineIsLeftAsItIsDrawn(): void
@@ -222,6 +222,6 @@ final class RightToLeftTest extends TestCase
         $pdf = PdfBuilder::build([
             'BT /F2 10 Tf 12 TL 72 720 Td (First line) Tj T* (Total: ) Tj /F1 10 Tf (cba) Tj T* /F2 10 Tf (Last line) Tj ET',
         ], $fonts, $extra);
-        $this->assertSame("First line\nTotal: אבג\nLast line", YetiPdf::parse($pdf)->text());
+        $this->assertSame("First line\nTotal: אבג\nLast line", YetiPdfRead::parse($pdf)->text());
     }
 }

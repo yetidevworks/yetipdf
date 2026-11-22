@@ -17,7 +17,7 @@ use YetiPdf\Read\Font\Ranges;
 use YetiPdf\Read\Font\Utf;
 use YetiPdf\Read\Options;
 use YetiPdf\Read\Tests\PdfBuilder;
-use YetiPdf\Read\YetiPdf;
+use YetiPdf\Read\YetiPdfRead;
 
 /** Small files that ask for far more memory or time than they are worth must cost a bounded amount and lose only their own part. */
 final class HardeningTest extends TestCase
@@ -190,8 +190,8 @@ final class HardeningTest extends TestCase
 
     public function testLongRunsOfNumbersInFrontOfAnOperatorAreHandledByTheirTail(): void
     {
-        $plain = YetiPdf::parse(PdfBuilder::build(['BT /F1 12 Tf 72 700 Td (a) Tj 0 -50 Td (b) Tj ET']))->text();
-        $long = YetiPdf::parse(PdfBuilder::build(['BT /F1 12 Tf ' . str_repeat('7 ', 60000) . '72 700 Td (a) Tj ' . str_repeat('7 ', 60000) . '0 -50 Td (b) Tj ET']))->text();
+        $plain = YetiPdfRead::parse(PdfBuilder::build(['BT /F1 12 Tf 72 700 Td (a) Tj 0 -50 Td (b) Tj ET']))->text();
+        $long = YetiPdfRead::parse(PdfBuilder::build(['BT /F1 12 Tf ' . str_repeat('7 ', 60000) . '72 700 Td (a) Tj ' . str_repeat('7 ', 60000) . '0 -50 Td (b) Tj ET']))->text();
 
         $this->assertSame("a\nb", $plain);
         $this->assertSame($plain, $long);
@@ -407,7 +407,7 @@ final class HardeningTest extends TestCase
             $lines .= "1 0 0 1 72 $y Tm (ab-) Tj 1 0 0 1 72 " . ($y - 12) . " Tm (cd) Tj ";
             $expected[] = 'abcd';
         }
-        $this->assertSame(implode("\n", $expected), YetiPdf::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
+        $this->assertSame(implode("\n", $expected), YetiPdfRead::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
 
         // A letter drawn over an accent takes the accent back out of the text, along with the line break before it, and puts both back.
         $lines = '';
@@ -415,7 +415,7 @@ final class HardeningTest extends TestCase
             $y = 780 - $i * 12;
             $lines .= "1 0 0 1 72 $y Tm (\264) Tj 1 0 0 1 72 $y Tm (e) Tj ";
         }
-        $this->assertSame(implode("\n", array_fill(0, 6000, 'é')), YetiPdf::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
+        $this->assertSame(implode("\n", array_fill(0, 6000, 'é')), YetiPdfRead::parse(PdfBuilder::build(["BT /F1 10 Tf $lines ET"]))->text());
     }
 
     /** A font that turns the code <0041> into a hundred letters. */
@@ -483,7 +483,7 @@ final class HardeningTest extends TestCase
         $pdf = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n";
         $at = strlen($pdf);
         $pdf .= "xref\n" . str_repeat("0 1000000\n0000000000 65535 f \n", 4000) . "trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n$at\n%%EOF\n";
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         $this->assertSame('', $doc->text());
         $this->assertContains('Cross-reference table was missing or damaged; rebuilt by scanning the file', $doc->warnings());
@@ -532,7 +532,7 @@ final class HardeningTest extends TestCase
             . $page(7, 8) . "8 0 obj\n<< /Length 999 >>\nstream\nBT /F1 12 Tf (three) Tj ET\nendobj\n"
             . "trailer << /Root 1 0 R >>\n";
 
-        $this->assertSame("one\n\ntwo\n\nthree", YetiPdf::parse($pdf)->text());
+        $this->assertSame("one\n\ntwo\n\nthree", YetiPdfRead::parse($pdf)->text());
     }
 
     public function testAType1EncodingIsReadFromTheStartOfAProgramThatIsTooBigToUnpack(): void
@@ -564,7 +564,7 @@ final class HardeningTest extends TestCase
     public function testAFileOfNothingButObjectMarkersIsRebuiltWithoutBuildingAMatchForEach(): void
     {
         $pdf = "%PDF-1.4\n" . str_repeat('1 0 obj ', 200000) . "\n2 0 obj\n<< /Type /Catalog /Pages 3 0 R >>\nendobj\n3 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\ntrailer << /Root 2 0 R >>\n";
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         $this->assertSame('', $doc->text());
         $this->assertContains('Cross-reference table was missing or damaged; rebuilt by scanning the file', $doc->warnings());
@@ -573,7 +573,7 @@ final class HardeningTest extends TestCase
     public function testSavingTheGraphicsStateWithoutEverRestoringItDoesNotPileUpCopies(): void
     {
         $content = str_repeat('q 1 0 0 1 1 1 cm ', 6000) . 'BT /F1 12 Tf 72 720 Td (still here) Tj ET' . str_repeat(' Q', 6000);
-        $this->assertSame('still here', YetiPdf::parse(PdfBuilder::build([$content]))->text());
+        $this->assertSame('still here', YetiPdfRead::parse(PdfBuilder::build([$content]))->text());
     }
 
     /** A page that uses $count composite fonts once each, every one with an embedded program whose table covers 65,535 glyphs. */
@@ -726,7 +726,7 @@ final class HardeningTest extends TestCase
         $head = "%PDF-1.4\n$pad" . "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n";
         $at = strlen($head);
         $pdf = $head . "xref\n0 5000000\n" . str_repeat("0000000000 65535 f \n", 3) . "trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n$at\n%%EOF\n";
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         $this->assertSame('', $doc->text());
         $this->assertContains('Cross-reference table was missing or damaged; rebuilt by scanning the file', $doc->warnings());
@@ -742,7 +742,7 @@ final class HardeningTest extends TestCase
             . str_repeat('trailer [ ', 20000) . "trailer << /Root 1 0 R >>\n";
 
         $start = microtime(true);
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
         $text = $doc->text();
         $elapsed = microtime(true) - $start;
 
@@ -858,6 +858,6 @@ final class HardeningTest extends TestCase
     public function testCombinedTfWithHugeNumberRunTrimsToTail(): void
     {
         $content = 'BT /F1 ' . str_repeat('1 ', 30000) . '12 Tf 72 720 Td (sized) Tj ET';
-        $this->assertSame('sized', YetiPdf::parse(PdfBuilder::build([$content]))->text());
+        $this->assertSame('sized', YetiPdfRead::parse(PdfBuilder::build([$content]))->text());
     }
 }

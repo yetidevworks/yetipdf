@@ -9,7 +9,8 @@ use PHPUnit\Framework\TestCase;
 use YetiPdf\Read\Tests\PdfBuilder;
 
 /**
- * Code written against yetidevworks/yetipdf 1.2 (classes directly under YetiPdf\) keeps working,
+ * Code written against yetidevworks/yetipdf 1.2 (classes directly under YetiPdf\), or against 1.3.0's
+ * YetiPdf\Read\YetiPdf entry point, keeps working,
  * whichever name a class is first loaded under. Each test runs in a fresh process, since what's
  * loaded already decides what an alias has to cover.
  */
@@ -74,12 +75,42 @@ final class LegacyNamesTest extends TestCase
             if ($rel === 'legacy') {
                 continue;
             }
-            $old = 'YetiPdf\\' . str_replace('/', '\\', $rel);
+            // The entry point was renamed in 1.3.1 as well as moved, from YetiPdf to YetiPdfRead.
+            $old = 'YetiPdf\\' . str_replace('/', '\\', $rel === 'YetiPdfRead' ? 'YetiPdf' : $rel);
             $this->assertTrue(class_exists($old) || interface_exists($old), $old);
             $this->assertSame('YetiPdf\\Read\\' . str_replace('/', '\\', $rel), (new \ReflectionClass($old))->getName());
             $count++;
         }
         $this->assertSame(27, $count);
+    }
+
+    #[RunInSeparateProcess]
+    public function testTheOneThreeZeroEntryPointNameStillWorks(): void
+    {
+        // 1.3.0 called the entry point YetiPdf\Read\YetiPdf. Asked for first, it has to load YetiPdfRead.
+        $doc = \YetiPdf\Read\YetiPdf::parse(self::pdf('Renamed'));
+        $this->assertStringContainsString('Renamed', $doc->text());
+        $this->assertSame(\YetiPdf\Read\YetiPdfRead::class, (new \ReflectionClass(\YetiPdf\Read\YetiPdf::class))->getName());
+        $this->assertSame(\YetiPdf\Read\YetiPdfRead::class, (new \ReflectionClass(\YetiPdf\YetiPdf::class))->getName());
+    }
+
+    #[RunInSeparateProcess]
+    public function testOldEntryPointNamesIgnoreCase(): void
+    {
+        // PHP class names ignore case, so code that spells an old name in another case still has to find it.
+        $this->assertTrue(class_exists('yetipdf\\read\\yetipdf'));
+        $this->assertSame(\YetiPdf\Read\YetiPdfRead::class, (new \ReflectionClass('YETIPDF\\YETIPDF'))->getName());
+    }
+
+    #[RunInSeparateProcess]
+    public function testEntryPointNamesAreOneClass(): void
+    {
+        // Loaded under its new name first, both old names are already there without autoloading.
+        \YetiPdf\Read\YetiPdfRead::parse(self::pdf());
+        $this->assertTrue(class_exists('YetiPdf\\YetiPdf', false));
+        $this->assertTrue(class_exists('YetiPdf\\Read\\YetiPdf', false));
+        $this->assertTrue(is_a(\YetiPdf\Read\YetiPdf::class, \YetiPdf\Read\YetiPdfRead::class, true));
+        $this->assertTrue(is_a(\YetiPdf\YetiPdf::class, \YetiPdf\Read\YetiPdfRead::class, true));
     }
 
     #[RunInSeparateProcess]

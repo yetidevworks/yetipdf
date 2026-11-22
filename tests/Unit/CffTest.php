@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use YetiPdf\Read\Font\Cff;
 use YetiPdf\Read\Tests\PdfBuilder;
-use YetiPdf\Read\YetiPdf;
+use YetiPdf\Read\YetiPdfRead;
 
 final class CffTest extends TestCase
 {
@@ -295,7 +295,7 @@ final class CffTest extends TestCase
         ]);
 
         // Ligatures are expanded to letters on the way out, so these come back as ordinary words.
-        $this->assertSame("Efficient subfield office offset \u{0393}\u{03A8} cac", YetiPdf::parse($pdf)->text());
+        $this->assertSame("Efficient subfield office offset \u{0393}\u{03A8} cac", YetiPdfRead::parse($pdf)->text());
     }
 
     /**

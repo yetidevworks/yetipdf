@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use YetiPdf\Read\Exception\InvalidPdfException;
 use YetiPdf\Read\Tests\PdfBuilder;
-use YetiPdf\Read\YetiPdf;
+use YetiPdf\Read\YetiPdfRead;
 
 final class ExtractionTest extends TestCase
 {
@@ -18,7 +18,7 @@ final class ExtractionTest extends TestCase
             'BT /F1 12 Tf 72 720 Td (Hello world) Tj ET',
             'BT /F1 12 Tf 72 720 Td (Second page) Tj ET',
         ]);
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         $this->assertSame(2, $doc->pageCount());
         $this->assertSame([1 => 'Hello world', 2 => 'Second page'], iterator_to_array($doc->pages()));
@@ -28,14 +28,14 @@ final class ExtractionTest extends TestCase
     public function testCompressedStreams(): void
     {
         $pdf = PdfBuilder::build(['BT /F1 12 Tf 72 720 Td (Deflated) Tj ET'], compress: true);
-        $this->assertSame('Deflated', YetiPdf::parse($pdf)->text());
+        $this->assertSame('Deflated', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testKerningDoesNotSplitWordsButGapsDo(): void
     {
         // Small adjustments are kerning; -300 is a third of an em, which is a word space.
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td [(W)80(or)-15(ld)-300(pe)10(ace)] TJ ET']);
-        $this->assertSame('World peace', YetiPdf::parse($pdf)->text());
+        $this->assertSame('World peace', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testSeparatelyPositionedStringsOnOneLine(): void
@@ -43,19 +43,19 @@ final class ExtractionTest extends TestCase
         // "Hello" is 22.78 wide at 10pt, so the second string starts 5pt after it ends: a space.
         // The third starts exactly where "Hello world" would continue: no space.
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 1 0 0 1 72 720 Tm (Hello) Tj 1 0 0 1 99.78 720 Tm (wor) Tj 1 0 0 1 113.67 720 Tm (ld) Tj ET']);
-        $this->assertSame('Hello world', YetiPdf::parse($pdf)->text());
+        $this->assertSame('Hello world', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testLineBreaksAndDehyphenation(): void
     {
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 12 TL 72 720 Td (An exam-) Tj T* (ple of text) Tj T* (Next line) Tj ET']);
-        $this->assertSame("An example of text\nNext line", YetiPdf::parse($pdf)->text());
+        $this->assertSame("An example of text\nNext line", YetiPdfRead::parse($pdf)->text());
     }
 
     public function testEscapesAndHexStrings(): void
     {
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td (a \(nested\) \101\\\\) Tj <20486921> Tj ET']);
-        $this->assertSame('a (nested) A\\ Hi!', YetiPdf::parse($pdf)->text());
+        $this->assertSame('a (nested) A\\ Hi!', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testToUnicodeWinsAndBadSectionsAreIgnored(): void
@@ -71,7 +71,7 @@ final class ExtractionTest extends TestCase
             ['F1' => '/Subtype /TrueType /BaseFont /Custom /ToUnicode 100 0 R'],
             [100 => PdfBuilder::stream($cmap)]
         );
-        $this->assertSame('Жfiabc12', YetiPdf::parse($pdf)->text());
+        $this->assertSame('Жfiabc12', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testDifferencesEncoding(): void
@@ -80,7 +80,7 @@ final class ExtractionTest extends TestCase
             ['BT /F1 10 Tf 72 720 Td (\001\002x) Tj ET'],
             ['F1' => '/Subtype /Type1 /BaseFont /Custom /Encoding << /Type /Encoding /Differences [1 /Eacute /f_f_i] >>']
         );
-        $this->assertSame('Éffix', YetiPdf::parse($pdf)->text());
+        $this->assertSame('Éffix', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testCompositeFontWithTwoByteCodes(): void
@@ -91,7 +91,7 @@ final class ExtractionTest extends TestCase
             ['F1' => '/Subtype /Type0 /BaseFont /Custom /Encoding /Identity-H /DescendantFonts [101 0 R] /ToUnicode 100 0 R'],
             [100 => PdfBuilder::stream($cmap), 101 => '<< /Type /Font /Subtype /CIDFontType2 /DW 1000 >>']
         );
-        $this->assertSame('日本', YetiPdf::parse($pdf)->text());
+        $this->assertSame('日本', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testToUnicodeCompressedWithoutDeclaringTheFilter(): void
@@ -102,7 +102,7 @@ final class ExtractionTest extends TestCase
             ['F1' => '/Subtype /Type0 /BaseFont /Custom /Encoding /Identity-H /DescendantFonts [101 0 R] /ToUnicode 100 0 R'],
             [100 => PdfBuilder::stream((string)gzcompress($cmap)), 101 => '<< /Type /Font /Subtype /CIDFontType2 /DW 1000 >>']
         );
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         $this->assertSame('日本', $doc->text());
         $this->assertSame([], $doc->warnings());
@@ -112,14 +112,14 @@ final class ExtractionTest extends TestCase
     {
         // How TeX draws "é": the acute accent, then back up and draw the letter under it.
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td [(caf\264)333(e)] TJ ET']);
-        $this->assertSame('café', YetiPdf::parse($pdf)->text());
+        $this->assertSame('café', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testAccentedLetterAtTheStartOfALineStaysOnThatLine(): void
     {
         // The accent is the first thing drawn on the new line. Taking it back to put it on its letter must not take the line break with it.
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td (the end) Tj 0 -12 Td [(\264)333(ecole is out)] TJ ET']);
-        $this->assertSame("the end\nécole is out", YetiPdf::parse($pdf)->text());
+        $this->assertSame("the end\nécole is out", YetiPdfRead::parse($pdf)->text());
     }
 
     public function testFormXObjectTextIsIncluded(): void
@@ -127,7 +127,7 @@ final class ExtractionTest extends TestCase
         $form = PdfBuilder::stream('BT /F1 10 Tf 0 0 Td (inside form) Tj ET', false, '/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 10 0 R >> >>');
         $pdf = PdfBuilder::build(['BT /F1 10 Tf 72 720 Td (page) Tj ET q 1 0 0 1 72 600 cm /Fm1 Do Q'], [], [100 => $form]);
         $pdf = str_replace('/Resources << /Font << /F1 10 0 R >> >> /Contents', '/Resources << /Font << /F1 10 0 R >> /XObject << /Fm1 100 0 R >> >> /Contents', $pdf);
-        $this->assertSame("page\ninside form", YetiPdf::parse($pdf)->text());
+        $this->assertSame("page\ninside form", YetiPdfRead::parse($pdf)->text());
     }
 
     /** A one-page file ("still read") ending in a cross-reference stream with the given dictionary entries and rows. */
@@ -174,7 +174,7 @@ final class ExtractionTest extends TestCase
             return true;
         });
         try {
-            $text = YetiPdf::parse($pdf)->text();
+            $text = YetiPdfRead::parse($pdf)->text();
         } finally {
             restore_error_handler();
         }
@@ -186,7 +186,7 @@ final class ExtractionTest extends TestCase
     {
         // A well-formed table that lists the content stream and nothing else. It is not empty, so it used to be believed.
         $pdf = self::withXrefStream('/Size 7 /W [1 2 1] /Index [4 1]', static fn(array $offsets): string => "\x01" . pack('n', $offsets[4]) . "\x00");
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         $this->assertSame('still read', $doc->text());
         $this->assertSame(['Cross-reference table was missing or damaged; rebuilt by scanning the file'], $doc->warnings());
@@ -196,7 +196,7 @@ final class ExtractionTest extends TestCase
     {
         $pdf = PdfBuilder::build(['BT /F1 12 Tf 72 720 Td (Still readable) Tj ET']);
         $broken = preg_replace('/startxref\s+\d+/', "startxref\n999999", $pdf);
-        $doc = YetiPdf::parse((string)$broken);
+        $doc = YetiPdfRead::parse((string)$broken);
 
         $this->assertSame('Still readable', $doc->text());
         $this->assertNotEmpty($doc->warnings());
@@ -206,7 +206,7 @@ final class ExtractionTest extends TestCase
     {
         $pdf = PdfBuilder::build(['BT /F1 12 Tf 72 720 Td (Length is wrong) Tj ET']);
         $pdf = preg_replace('/\/Length \d+/', '/Length 3', $pdf);
-        $this->assertSame('Length is wrong', YetiPdf::parse((string)$pdf)->text());
+        $this->assertSame('Length is wrong', YetiPdfRead::parse((string)$pdf)->text());
     }
 
     public function testDrawingOperatorsAndInlineImagesAreSkipped(): void
@@ -214,7 +214,7 @@ final class ExtractionTest extends TestCase
         $content = "0.5 w 10 10 m 200 200 l S 1 0 0 rg 5 5 50 50 re f\n"
             . "BI /W 2 /H 2 /BPC 8 /CS /G ID \x00(Tj\xFF EI\n"
             . 'BT /F1 10 Tf 72 720 Td (text) Tj ET';
-        $this->assertSame('text', YetiPdf::parse(PdfBuilder::build([$content]))->text());
+        $this->assertSame('text', YetiPdfRead::parse(PdfBuilder::build([$content]))->text());
     }
 
     public function testLongDrawingNumberRunDoesNotConsumeTextOperands(): void
@@ -222,7 +222,7 @@ final class ExtractionTest extends TestCase
         $content = 'BT /F1 10 Tf 72 720 Td (before) Tj ET '
             . str_repeat('1 ', 8000) . 'm '
             . "BT /F1 10 Tf 1\t0 0\n1 72 700 Tm [(after)-300(path)] TJ ET";
-        $this->assertSame("before\nafter path", YetiPdf::parse(PdfBuilder::build([$content]))->text());
+        $this->assertSame("before\nafter path", YetiPdfRead::parse(PdfBuilder::build([$content]))->text());
     }
 
     public function testUnclosedInlineImageHeadersDoNotHideLaterText(): void
@@ -230,13 +230,13 @@ final class ExtractionTest extends TestCase
         $content = "BI /W 1 /H 1 ID \x00 EI\n"
             . str_repeat('BI /W 1 ', 8000) . 'ID/ '
             . 'BT /F1 10 Tf 72 720 Td (still readable) Tj ET';
-        $this->assertSame('still readable', YetiPdf::parse(PdfBuilder::build([$content]))->text());
+        $this->assertSame('still readable', YetiPdfRead::parse(PdfBuilder::build([$content]))->text());
     }
 
     public function testNotAPdf(): void
     {
         $this->expectException(InvalidPdfException::class);
-        YetiPdf::parse('just some text');
+        YetiPdfRead::parse('just some text');
     }
 
     public function testSinglePageMatchesIterationAndOutOfRangeIsEmpty(): void
@@ -246,7 +246,7 @@ final class ExtractionTest extends TestCase
             'BT /F1 12 Tf 72 720 Td (Two) Tj ET',
             'BT /F1 12 Tf 72 720 Td (Three) Tj ET',
         ]);
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         foreach (iterator_to_array($doc->pages()) as $number => $text) {
             $this->assertSame($text, $doc->page($number));
@@ -261,15 +261,15 @@ final class ExtractionTest extends TestCase
         $widths = implode(' ', array_fill(0, 126, 500));
         $font = "/Subtype /Type1 /BaseFont /Custom /FirstChar 0 /Widths [0 0 250 $widths] /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [2 /g3] >>";
         $pdf = PdfBuilder::build(["BT /F1 10 Tf 72 720 Td (Perceived\002Ease\002of\002Use) Tj ET"], ['F1' => $font]);
-        $this->assertSame('Perceived Ease of Use', YetiPdf::parse($pdf)->text());
+        $this->assertSame('Perceived Ease of Use', YetiPdfRead::parse($pdf)->text());
 
         // On its own it adds nothing: the positions of the strings around it already tell the words apart.
         $pdf = PdfBuilder::build(["BT /F1 10 Tf 72 720 Td (One) Tj (\002) Tj (Two) Tj 0 -12 Td (\002) Tj 0 -12 Td (Three) Tj ET"], ['F1' => $font]);
-        $this->assertSame("One Two\nThree", YetiPdf::parse($pdf)->text());
+        $this->assertSame("One Two\nThree", YetiPdfRead::parse($pdf)->text());
 
         // A code with no width is not a gap.
         $pdf = PdfBuilder::build(["BT /F1 10 Tf 72 720 Td (No\001gap) Tj ET"], ['F1' => $font]);
-        $this->assertSame('Nogap', YetiPdf::parse($pdf)->text());
+        $this->assertSame('Nogap', YetiPdfRead::parse($pdf)->text());
     }
 
     public function testStampTextIsReadAndLinksAreNot(): void
@@ -283,7 +283,7 @@ final class ExtractionTest extends TestCase
         ]);
         $pdf = str_replace('/Contents 31 0 R', '/Contents 31 0 R /Annots [100 0 R 102 0 R]', $pdf);
 
-        $this->assertSame("Body\nAPPROVED", YetiPdf::parse($pdf)->text());
+        $this->assertSame("Body\nAPPROVED", YetiPdfRead::parse($pdf)->text());
     }
 
     public function testUnusualWhitespaceCommentsAndEscapesInContentStreams(): void
@@ -296,18 +296,18 @@ final class ExtractionTest extends TestCase
         $pdf = PdfBuilder::build([$content], [], [100 => $form]);
         $pdf = str_replace('/Resources << /Font << /F1 10 0 R >> >> /Contents', '/Resources << /Font << /F1 10 0 R >> /XObject << /Fm1 100 0 R >> >> /Contents', $pdf);
 
-        $this->assertSame("AB\nCD\nE\n23\nfrom form", YetiPdf::parse($pdf)->text());
+        $this->assertSame("AB\nCD\nE\n23\nfrom form", YetiPdfRead::parse($pdf)->text());
     }
 
     public function testFakeBoldAfterWordGapTjAndIncompleteTmAfterKernedTj(): void
     {
         // Fake bold overprint on the last fragment of a word-spaced TJ must still be suppressed.
         $overprint = 'BT /F1 10 Tf 1 0 0 1 0 20 Tm [(A)-200(B)] TJ 1 0 0 1 8.67 20 Tm (B) Tj ET';
-        $this->assertSame('A B', YetiPdf::parse(PdfBuilder::build([$overprint]))->text());
+        $this->assertSame('A B', YetiPdfRead::parse(PdfBuilder::build([$overprint]))->text());
 
         // An incomplete Tm ("1 Tm") does not reset te/tf, so prior TJ kerning must still apply before "(D) Tj".
         $incompleteTm = 'BT /F1 10 Tf 0 20 Td [(A)-97(B)-97(C)] TJ 1 Tm (D) Tj ET';
-        $this->assertSame('ABC D', YetiPdf::parse(PdfBuilder::build([$incompleteTm]))->text());
+        $this->assertSame('ABC D', YetiPdfRead::parse(PdfBuilder::build([$incompleteTm]))->text());
     }
 
     public function testStampAnnotationsWithEndobjStringAndCommentedArrayAreStillRead(): void
@@ -321,6 +321,6 @@ final class ExtractionTest extends TestCase
         ]);
         $pdf = str_replace('/Contents 31 0 R', '/Contents 31 0 R /Annots [100 0 R 102 0 R]', $pdf);
 
-        $this->assertSame("Body\nSTAMP1\nSTAMP2", YetiPdf::parse($pdf)->text());
+        $this->assertSame("Body\nSTAMP1\nSTAMP2", YetiPdfRead::parse($pdf)->text());
     }
 }

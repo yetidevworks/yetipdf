@@ -7,7 +7,7 @@ namespace YetiPdf\Read\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 use YetiPdf\Read\Font\TrueTypeMap;
 use YetiPdf\Read\Tests\PdfBuilder;
-use YetiPdf\Read\YetiPdf;
+use YetiPdf\Read\YetiPdfRead;
 
 final class TrueTypeMapTest extends TestCase
 {
@@ -302,7 +302,7 @@ final class TrueTypeMapTest extends TestCase
                 102 => '<< /Type /FontDescriptor /FontName /AAAAAA+Subset /Flags 4 /FontFile2 100 0 R >>',
             ]
         );
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         $this->assertSame('Hi Hii', $doc->text());
         $this->assertSame([], $doc->warnings());
@@ -319,7 +319,7 @@ final class TrueTypeMapTest extends TestCase
                 102 => '<< /Type /FontDescriptor /FontName /Broken /Flags 4 /FontFile2 100 0 R >>',
             ]
         );
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
 
         $this->assertSame('', $doc->text());
         $this->assertSame(['Font Broken has no character map; text set in it may be missing or wrong'], $doc->warnings());

@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use YetiPdf\Read\Font\CidCollection;
 use YetiPdf\Read\Tests\PdfBuilder;
-use YetiPdf\Read\YetiPdf;
+use YetiPdf\Read\YetiPdfRead;
 
 final class CidCollectionTest extends TestCase
 {
@@ -77,7 +77,7 @@ final class CidCollectionTest extends TestCase
     public function testJapanese1FontWithoutToUnicodeIsReadFromTheCollection(): void
     {
         $pdf = $this->pdf('Japan1', '<034B0465>');
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
         $this->assertSame('あ亜', $doc->text());
         $this->assertSame([], $doc->warnings());
     }
@@ -92,7 +92,7 @@ final class CidCollectionTest extends TestCase
                 102 => '<< /Registry (Adobe) /Ordering <4B6F726561310000> /Supplement 2 >>',
             ]
         );
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
         // CID 0x1BB1 is 7089, which Adobe-Korea1 lists as U+7AD9.
         $this->assertSame('站', $doc->text());
         $this->assertSame([], $doc->warnings());
@@ -106,7 +106,7 @@ final class CidCollectionTest extends TestCase
             ['F1' => '/Subtype /Type0 /BaseFont /Custom /Encoding /Identity-H /DescendantFonts [101 0 R] /ToUnicode 100 0 R'],
             [100 => PdfBuilder::stream($cmap), 101 => $this->cidFont('Japan1')]
         );
-        $this->assertSame('X', YetiPdf::parse($pdf)->text());
+        $this->assertSame('X', YetiPdfRead::parse($pdf)->text());
     }
 
     /** @return iterable<string, array{string, string}> */
@@ -126,7 +126,7 @@ final class CidCollectionTest extends TestCase
             ['F1' => "/Subtype /Type0 /BaseFont /Custom /Encoding $encoding /DescendantFonts [101 0 R]"],
             [101 => "<< /Type /Font /Subtype /CIDFontType0 /DW 1000 /CIDSystemInfo << /Registry $info >> >>"]
         );
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
         $this->assertSame('', $doc->text());
         $this->assertNotEmpty($doc->warnings());
     }
@@ -139,7 +139,7 @@ final class CidCollectionTest extends TestCase
             ['F1' => '/Subtype /Type0 /BaseFont /Custom /Encoding /Custom-H /DescendantFonts [101 0 R]'],
             [101 => $this->cidFont('Japan1')]
         );
-        $doc = YetiPdf::parse($pdf);
+        $doc = YetiPdfRead::parse($pdf);
         $this->assertSame('', $doc->text());
         $this->assertNotEmpty($doc->warnings());
     }
